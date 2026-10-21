@@ -251,7 +251,7 @@ Mac 可用于代码、权重文件和清单检查，但本工程的正式训练�
 | 对照 2 | `E0_sqrt_posweight_seed42` | ImageNet-1K | G1 | 加权 BCE | **sqrt(ratio)** | 减弱自动 ratio 的幅度 |
 | 对照 3 | `E0_manual_posweight_seed42` | ImageNet-1K | G1 | 加权 BCE | **2,1,1,2,1,1,1,2,1,1** | 复核三个困难标签的手动弱加权 |
 
-这里的四组“损失/标签策略”包含 E0 ratio 基线、全 1、sqrt(ratio) 和手动权重四组；前三个新增损失/归一化/增强实验都只改变一项。`AutoAugment` 使用 torchvision 的 `AutoAugmentPolicy.IMAGENET`，它是探索性对照，不能直接当作医学图像的默认增强。数据集归一化统计在训练清单图像经过 `ResizePadToSquare(224)` 和 0 填充后计算，保存在该 run 的 `dataset_normalization.json`，续训复用同一份缓存。
+这里的四组“损失/标签策略”包含 E0 ratio 基线、全 1、sqrt(ratio) 和手动权重四组；前三个新增损失/归一化/增强实验都只改变一项。`AutoAugment` 使用 torchvision 的 `AutoAugmentPolicy.IMAGENET`，它是探索性对照，不能直接当作医学图像的默认增强。数据集归一化统计在训练清单图像经过 `ResizePadToSquare(224)` 和 0 填充后计算，保存在该 run 的 `dataset_normalization.json`；缓存记录训练清单 SHA-256、图片根目录和输入尺寸，续训会检查来源一致后复用。旧版本无来源记录的缓存不能安全续用，应该作为新 run 重新计算归一化并从预训练权重开始。
 
 每组的配置覆盖如下；未列出的字段沿用 `configs/g1_seed42.yaml`：
 
@@ -303,7 +303,7 @@ manual_pos_weights: [2, 1, 1, 2, 1, 1, 1, 2, 1, 1]
 
 ## 当前实现状态
 
-`build_transform()` 已由配置驱动：G0 关闭随机增强，G1 读取 YAML 中的仿射、色彩和翻转参数，AutoAugment 使用 ImageNet policy；验证始终不使用随机增强。训练入口支持 `normalization: dataset`、`loss: focal`、`pos_weight_mode: ratio/unit/sqrt/manual`，并把清单 SHA-256、Git revision、实际权重、损失和归一化信息写入 `run_manifest.json`。未知策略、缺失手动权重和非法数值会在启动时直接报错。
+`build_transform()` 已由配置驱动：G0 关闭随机增强，G1 读取 YAML 中的仿射、色彩和翻转参数，AutoAugment 使用 ImageNet policy；验证始终不使用随机增强。训练入口支持 `normalization: dataset`、`loss: focal`、`pos_weight_mode: ratio/unit/sqrt/manual`，并把清单 SHA-256、Git revision、工作区是否有改动、已跟踪 diff SHA-256、实际权重、损失和归一化信息写入 `run_manifest.json`。未跟踪文件路径也会被记录。缓存来源变化、未知策略、缺失手动权重、NaN/Inf 和其它非法数值会在启动时直接报错。
 
 ## 后续实验与记录清单
 
@@ -338,7 +338,7 @@ G0 与 G1 的对照采用相同骨干权重、数据清单、标签策略、posw
 
 ### 3. 记录规则与实验判定
 
-每次 run 应保存完整配置副本和 manifest；当前代码会保存逐 epoch 验证 AUC、最佳 epoch、逐标签 AUC、数据清单路径与 SHA-256、预训练权重 SHA-256、Git revision、损失、posweight 和归一化信息。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
+每次 run 应保存完整配置副本和 manifest；当前代码会保存逐 epoch 验证 AUC、最佳 epoch、逐标签 AUC、数据清单路径与 SHA-256、预训练权重 SHA-256、Git revision 和本地工作区状态（已跟踪 diff 的 SHA-256 与未跟踪文件路径）、损失、posweight 和归一化信息。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
 
 筛选时先看十标签 macro AUC，再看三种子均值和标准差、各标签变化与训练稳定性。单个 seed 的小幅提升只作候选，不称为稳定提升；需要 seed42 筛选的候选，使用 2027 和 3407 做受控复核。相同验证集上的很多轮筛选会逐渐过拟合验证集，所以先按上述少量单因素对照推进。
 

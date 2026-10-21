@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import random
-import subprocess
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -31,6 +30,11 @@ from .losses import combine_main_and_expert_logits, compute_training_loss
 from .manifest import resolve_pos_weights
 from .metrics import compute_macro_auc
 from .model import MODEL_NAME, ConvNeXtStudyClassifier
+from .provenance import (
+    dataset_normalization_source,
+    git_working_tree_state,
+    validate_dataset_normalization_cache,
+)
 from .schedule import scheduler_step_counts
 
 
@@ -148,39 +152,25 @@ def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def _git_revision(project_root):
-    try:
-        result = subprocess.run(
-            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return result.stdout.strip() or None
-
-
 def _normalization_stats(config, train_manifest, image_root, run_dir):
     if str(config["normalization"]).lower() != "dataset":
         return None
     stats_path = run_dir / "dataset_normalization.json"
+    source = dataset_normalization_source(
+        train_manifest,
+        image_root,
+        input_size=int(config["input_size"]),
+    )
     if stats_path.is_file():
         with stats_path.open("r", encoding="utf-8") as handle:
             stats = json.load(handle)
-        if (
-            not isinstance(stats, dict)
-            or len(stats.get("mean", ())) != 3
-            or len(stats.get("std", ())) != 3
-            or int(stats.get("input_size", -1)) != int(config["input_size"])
-        ):
-            raise ValueError(f"invalid cached dataset normalization statistics: {stats_path}")
-        return stats
+        return validate_dataset_normalization_cache(stats, source, stats_path)
     stats = compute_dataset_normalization(
         train_manifest,
         image_root,
         input_size=int(config["input_size"]),
     )
+    stats["source"] = source
     _write_json(stats_path, stats)
     return stats
 
@@ -379,6 +369,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         "valid_images": sum(len(study.image_paths) for study in valid_data.studies),
         "excluded_train_paths": (Path(config["_project_root"]) / "data/manifests/excluded_train_paths.txt").read_text(encoding="utf-8").splitlines(),
     }
+    git_state = git_working_tree_state(config["_project_root"])
     run_manifest = {
         "status": "running",
         "config": _plain_config(config),
@@ -404,7 +395,8 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
             "resumed_from": str(Path(resume).resolve()) if resume else None,
         },
         "device": str(device),
-        "git_revision": _git_revision(config["_project_root"]),
+        "git": git_state,
+        "git_revision": git_state["revision"],
         "started_at_unix": time.time(),
     }
     _write_json(run_dir / "run_manifest.json", run_manifest)

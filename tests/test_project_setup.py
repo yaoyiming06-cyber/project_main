@@ -57,6 +57,15 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertTrue(any(isinstance(op, transforms.RandomHorizontalFlip) for op in g1.transforms))
         self.assertTrue(any(isinstance(op, transforms.AutoAugment) for op in autoaug.transforms))
 
+    def test_dataset_normalization_rejects_non_finite_statistics(self):
+        with self.assertRaisesRegex(ValueError, "must be finite"):
+            build_transform(
+                False,
+                input_size=8,
+                config={"augmentation": "G0", "normalization": "dataset"},
+                normalization={"mean": [0.4, float("nan"), 0.6], "std": [0.2, 0.3, 0.4]},
+            )
+
     def test_dataset_normalization_uses_resize_padded_pixels(self):
         from cxr_project.dataset import compute_dataset_normalization
 

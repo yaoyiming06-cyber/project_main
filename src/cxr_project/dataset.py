@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -77,6 +78,8 @@ def build_transform(
             )
         mean = tuple(float(value) for value in mean)
         std = tuple(float(value) for value in std)
+        if any(not math.isfinite(value) for value in (*mean, *std)):
+            raise ValueError("dataset normalization mean/std values must be finite")
         if any(value <= 0 for value in std):
             raise ValueError("normalization standard deviations must be positive")
     else:
