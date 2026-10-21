@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cxr-project-main"
+version = "0.1.0"
+description = "Windows CUDA chest X-ray competition training project"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+  "numpy>=1.26,<3",
+  "Pillow>=10.2",
+  "PyYAML>=6.0",
+  "scikit-learn>=1.4",
+  "timm==1.0.30",
+  "safetensors==0.8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
