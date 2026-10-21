@@ -29,6 +29,10 @@ image_chunk_size: 2
 label_strategy: E0
 blank_policy: zero
 uncertain_policy: ignore
+pos_weight_mode: ratio
+manual_pos_weights: null
+loss: bce
+focal_gamma: 2.0
 max_pos_weight: 20.0
 hard_label_indices: [0, 3, 7]
 expert_loss_weight: 0.5

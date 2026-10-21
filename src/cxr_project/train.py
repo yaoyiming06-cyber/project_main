@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import random
+import subprocess
 import time
 from contextlib import nullcontext
 from pathlib import Path
@@ -17,12 +18,19 @@ import torch
 from torch.utils.data import DataLoader
 
 from .config import load_config, resolve_path
-from .dataset import StudyDataset, build_transform, collate_studies
+from .dataset import (
+    IMAGENET_MEAN,
+    IMAGENET_STD,
+    StudyDataset,
+    build_transform,
+    collate_studies,
+    compute_dataset_normalization,
+)
 from .labels import LABEL_NAMES
 from .losses import combine_main_and_expert_logits, compute_training_loss
-from .manifest import compute_pos_weights
+from .manifest import resolve_pos_weights
 from .metrics import compute_macro_auc
-from .model import ConvNeXtStudyClassifier
+from .model import MODEL_NAME, ConvNeXtStudyClassifier
 from .schedule import scheduler_step_counts
 
 
@@ -140,6 +148,43 @@ def _write_json(path, value):
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
+def _git_revision(project_root):
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_root), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return result.stdout.strip() or None
+
+
+def _normalization_stats(config, train_manifest, image_root, run_dir):
+    if str(config["normalization"]).lower() != "dataset":
+        return None
+    stats_path = run_dir / "dataset_normalization.json"
+    if stats_path.is_file():
+        with stats_path.open("r", encoding="utf-8") as handle:
+            stats = json.load(handle)
+        if (
+            not isinstance(stats, dict)
+            or len(stats.get("mean", ())) != 3
+            or len(stats.get("std", ())) != 3
+            or int(stats.get("input_size", -1)) != int(config["input_size"])
+        ):
+            raise ValueError(f"invalid cached dataset normalization statistics: {stats_path}")
+        return stats
+    stats = compute_dataset_normalization(
+        train_manifest,
+        image_root,
+        input_size=int(config["input_size"]),
+    )
+    _write_json(stats_path, stats)
+    return stats
+
+
 def _plain_config(config):
     return {key: value for key, value in config.items() if not key.startswith("_")}
 
@@ -174,7 +219,11 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
             main_logits, expert_logits = model(images, offsets, view_ids)
         loss, _ = compute_training_loss(
             main_logits.float(), expert_logits.float(), targets,
-            pos_weights, config["hard_label_indices"], config["expert_loss_weight"],
+            pos_weights,
+            config["hard_label_indices"],
+            config["expert_loss_weight"],
+            config["loss"],
+            config["focal_gamma"],
         )
         if not torch.isfinite(loss):
             raise FloatingPointError(f"non-finite loss at epoch {epoch + 1}, batch {step + 1}")
@@ -219,12 +268,25 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     run_dir = Path(output_dir).resolve() if output_dir else resolve_path(config, "output_dir")
     if run_dir.exists() and resume is None:
         raise FileExistsError(f"run directory already exists; choose a new --output-dir or pass --resume: {run_dir}")
+    if config["model"] != MODEL_NAME:
+        raise ValueError(f"unsupported model in config: {config['model']!r}; expected {MODEL_NAME!r}")
+    run_dir.mkdir(parents=True, exist_ok=True)
 
-    train_transform = build_transform(True, int(config["input_size"]))
-    valid_transform = build_transform(False, int(config["input_size"]))
+    normalization_stats = _normalization_stats(config, train_manifest, image_root, run_dir)
+    train_transform = build_transform(
+        True, int(config["input_size"]), config=config, normalization=normalization_stats,
+    )
+    valid_transform = build_transform(
+        False, int(config["input_size"]), config=config, normalization=normalization_stats,
+    )
     train_data = StudyDataset(train_manifest, image_root, train_transform, labeled=True)
     valid_data = StudyDataset(valid_manifest, image_root, valid_transform, labeled=True)
-    pos_weights_list = compute_pos_weights(train_data.studies, cap=float(config["max_pos_weight"]))
+    pos_weights_list = resolve_pos_weights(
+        train_data.studies,
+        mode=config["pos_weight_mode"],
+        cap=float(config["max_pos_weight"]),
+        manual=config["manual_pos_weights"],
+    )
     pos_weights = torch.tensor(pos_weights_list, dtype=torch.float32, device=device)
 
     generator = torch.Generator()
@@ -270,7 +332,6 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     )
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and bool(config["amp"]))
 
-    run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "config_resolved.yaml").write_text(
         Path(config_path).read_text(encoding="utf-8"), encoding="utf-8",
     )
@@ -309,7 +370,9 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     data_summary = {
         "image_root": str(image_root),
         "train_manifest": str(train_manifest),
+        "train_manifest_sha256": _file_sha256(train_manifest),
         "valid_manifest": str(valid_manifest),
+        "valid_manifest_sha256": _file_sha256(valid_manifest),
         "train_studies": len(train_data),
         "train_images": sum(len(study.image_paths) for study in train_data.studies),
         "valid_studies": len(valid_data),
@@ -323,7 +386,16 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         "labels": list(LABEL_NAMES),
         "hard_labels": [LABEL_NAMES[index] for index in config["hard_label_indices"]],
         "pos_weights": pos_weights_list,
-        "pos_weight_source": "auto_ratio_capped_by_20_from_unique_training_studies",
+        "pos_weight_source": config["pos_weight_mode"],
+        "loss": {
+            "name": config["loss"],
+            "focal_gamma": float(config["focal_gamma"]),
+        },
+        "normalization": normalization_stats or {
+            "name": config["normalization"],
+            "mean": list(IMAGENET_MEAN),
+            "std": list(IMAGENET_STD),
+        },
         "pretrained_weights": {
             "type": "pure ImageNet-22K ConvNeXt-Base (non-medical; 21,841 classes)",
             "model": "convnext_base.fb_in22k",
@@ -332,6 +404,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
             "resumed_from": str(Path(resume).resolve()) if resume else None,
         },
         "device": str(device),
+        "git_revision": _git_revision(config["_project_root"]),
         "started_at_unix": time.time(),
     }
     _write_json(run_dir / "run_manifest.json", run_manifest)

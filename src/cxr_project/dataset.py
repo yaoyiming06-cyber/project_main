@@ -1,9 +1,10 @@
-"""Study-level PyTorch dataset and G1 image preprocessing."""
+"""Study-level dataset and configuration-driven image preprocessing."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import torch
 from PIL import Image, ImageOps
 from torch.utils.data import Dataset
@@ -41,22 +42,74 @@ class ResizePadToSquare:
         return ImageOps.expand(resized, border=border, fill=self.fill)
 
 
-def build_transform(is_train: bool, input_size: int = 224):
+def build_transform(
+    is_train: bool,
+    input_size: int = 224,
+    config: dict | None = None,
+    normalization: dict | None = None,
+):
+    """Build the configured transform.
+
+    Validation always uses deterministic resize, tensor conversion and
+    normalization.  Training-only operations are selected by ``augmentation``
+    and are intentionally explicit so an experiment cannot silently fall back
+    to G1 after a typo.
+    """
+    config = config or {}
+    augmentation = str(config.get("augmentation", "G1")).strip().upper()
+    if augmentation not in {"G0", "G1", "AUTOAUG"}:
+        raise ValueError(f"unsupported augmentation strategy: {augmentation!r}")
+
+    normalization_name = str(config.get("normalization", "imagenet1k")).strip().lower()
+    if normalization_name == "imagenet1k":
+        mean = IMAGENET_MEAN
+        std = IMAGENET_STD
+    elif normalization_name == "dataset":
+        if normalization is None:
+            mean = config.get("normalization_mean")
+            std = config.get("normalization_std")
+        else:
+            mean = normalization.get("mean")
+            std = normalization.get("std")
+        if mean is None or std is None or len(mean) != 3 or len(std) != 3:
+            raise ValueError(
+                "dataset normalization requires three-channel normalization mean/std"
+            )
+        mean = tuple(float(value) for value in mean)
+        std = tuple(float(value) for value in std)
+        if any(value <= 0 for value in std):
+            raise ValueError("normalization standard deviations must be positive")
+    else:
+        raise ValueError(f"unsupported normalization: {normalization_name!r}")
+
     ops = [ResizePadToSquare(input_size)]
     if is_train:
-        # G1: light affine and brightness/contrast changes; no horizontal flip.
-        ops.extend([
-            transforms.RandomAffine(
-                degrees=3,
-                translate=(0.02, 0.02),
-                scale=(0.98, 1.02),
-                fill=0,
-            ),
-            transforms.ColorJitter(brightness=0.08, contrast=0.08),
-        ])
+        if augmentation == "G1":
+            scale = config.get("augmentation_scale", (0.98, 1.02))
+            if len(scale) != 2 or float(scale[0]) <= 0 or float(scale[1]) < float(scale[0]):
+                raise ValueError("augmentation_scale must be an increasing positive pair")
+            ops.extend([
+                transforms.RandomAffine(
+                    degrees=float(config.get("augmentation_degrees", 3)),
+                    translate=(
+                        float(config.get("augmentation_translate", 0.02)),
+                        float(config.get("augmentation_translate", 0.02)),
+                    ),
+                    scale=(float(scale[0]), float(scale[1])),
+                    fill=0,
+                ),
+                transforms.ColorJitter(
+                    brightness=float(config.get("color_jitter_brightness", 0.08)),
+                    contrast=float(config.get("color_jitter_contrast", 0.08)),
+                ),
+            ])
+        elif augmentation == "AUTOAUG":
+            ops.append(transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET))
+        if bool(config.get("horizontal_flip", False)):
+            ops.append(transforms.RandomHorizontalFlip())
     ops.extend([
         transforms.ToTensor(),
-        transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD),
+        transforms.Normalize(mean, std),
     ])
     return transforms.Compose(ops)
 
@@ -117,6 +170,47 @@ class StudyDataset(Dataset):
             "labels": labels,
             "study_id": study.study_id,
         }
+
+
+def compute_dataset_normalization(manifest_path, image_root, input_size: int = 224):
+    """Compute RGB mean and standard deviation after resize and square padding.
+
+    The statistics are accumulated per pixel without retaining images in
+    memory.  They are therefore deterministic for a fixed manifest and image
+    tree, and can be cached by the training entry point for resumed runs.
+    """
+    dataset = StudyDataset(
+        manifest_path,
+        image_root,
+        transform=None,
+        labeled=True,
+        verify_paths=True,
+    )
+    resize = ResizePadToSquare(input_size)
+    channel_sum = np.zeros(3, dtype=np.float64)
+    channel_square_sum = np.zeros(3, dtype=np.float64)
+    pixel_count = 0
+    for paths in dataset.resolved_image_paths:
+        for path in paths:
+            with Image.open(path) as source:
+                image = np.asarray(resize(source.convert("RGB")), dtype=np.float32) / 255.0
+            pixels = image.reshape(-1, 3)
+            channel_sum += pixels.sum(axis=0, dtype=np.float64)
+            channel_square_sum += np.square(pixels, dtype=np.float32).sum(axis=0, dtype=np.float64)
+            pixel_count += pixels.shape[0]
+    if pixel_count == 0:
+        raise ValueError("cannot compute normalization statistics from an empty manifest")
+    mean = channel_sum / pixel_count
+    variance = np.maximum(channel_square_sum / pixel_count - np.square(mean), 1e-12)
+    std = np.sqrt(variance)
+    return {
+        "name": "dataset",
+        "mean": [float(value) for value in mean],
+        "std": [float(value) for value in std],
+        "input_size": int(input_size),
+        "images": sum(len(paths) for paths in dataset.resolved_image_paths),
+        "pixels_per_image": int(input_size) * int(input_size),
+    }
 
 
 def collate_studies(batch):

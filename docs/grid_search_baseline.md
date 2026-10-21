@@ -78,9 +78,9 @@
 
 ### 1. 让增强策略由配置实际控制
 
-当前 `configs/g1_seed42.yaml` 已经写入 `augmentation`、仿射、色彩变化及 `horizontal_flip` 字段；但 `src/cxr_project/dataset.py` 的 `build_transform()` 目前直接硬编码 G1，训练入口也没有把配置传入变换构建。因此当前 yaml 改为 G0 或修改 G1 数值，都不会按预期改变训练数据。
+`configs/g1_seed42.yaml` 的 `augmentation`、仿射、色彩变化、`horizontal_flip` 和 `normalization` 字段已经接入 `build_transform()`；训练入口会按配置构建训练/验证变换，未知策略直接报错。
 
-建议将 `build_transform` 改为接收已加载配置，训练和验证均使用该配置构建变换。训练集仅在 `augmentation: G1` 时按 YAML 值加入 `RandomAffine` 和 `ColorJitter`；仅在 `horizontal_flip: true` 时加入随机翻转。G0 定义为保留 `ResizePadToSquare → ToTensor → ImageNet Normalize`，关闭所有随机变换。验证与测试变换始终确定性。遇到未知 augmentation 名称要直接报错，避免拼写错误静默退回某个策略。
+训练集支持 G0、G1 和 torchvision `AutoAugmentPolicy.IMAGENET`；`normalization: dataset` 会在 resize/pad 后计算并缓存训练集 mean/std，验证始终使用确定性变换。G0 关闭所有随机增强。
 
 相关文件：
 
@@ -93,7 +93,7 @@ G0 与 G1 的对照采用相同骨干权重、数据清单、标签策略、posw
 
 ### 2. 增加受控实验配置，而不是一次性穷举全网格
 
-当前只有 `configs/g1_seed42.yaml` 和 `scripts/run_g1_seed42.ps1`。不必先改训练算法或增加复杂网格调度器；先增加可审阅的单实验 YAML 配置，每次单独启动一次训练。配置必须设置不同的 `run_name` 和 `output_dir`，防止结果覆盖。
+当前保留 `configs/g1_seed42.yaml` 和 `scripts/run_g1_seed42.ps1` 作为基线入口。三组新增消融（dataset norm、AutoAugment、Focal）和三组 posweight 对照（unit、sqrt、manual）应复制基线 YAML 后单独启动，每次使用不同的 `run_name` 和 `output_dir`。
 
 建议配置顺序：
 
@@ -107,7 +107,7 @@ G0 与 G1 的对照采用相同骨干权重、数据清单、标签策略、posw
 
 ### 3. 记录规则与实验判定
 
-每次 run 应保存完整配置副本和 manifest；保留逐 epoch 验证 AUC、最佳 epoch、逐标签 AUC、数据清单版本、预训练权重 SHA-256、代码版本和 seed。当前代码会保存配置副本、运行 manifest、训练/验证清单路径与样本数，以及预训练权重 SHA-256；尚未记录清单文件 SHA-256 和 Git 代码版本。若要让网格结果可精确复现，建议后续给 manifest 增加这两个字段。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
+每次 run 应保存完整配置副本和 manifest；当前代码还记录训练/验证清单 SHA-256、预训练权重 SHA-256、Git revision、损失、posweight 和归一化信息。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
 
 筛选时先看十标签 macro AUC，再看三种子均值和标准差、各标签变化与训练稳定性。单个 seed 的小幅提升只作候选，不称为稳定提升；需要 seed42 筛选的候选，使用 2027 和 3407 做受控复核。相同验证集上的很多轮筛选会逐渐过拟合验证集，所以先按上述少量单因素对照推进。
 

@@ -26,6 +26,57 @@ class ProjectSetupTests(unittest.TestCase):
         self.assertEqual(config["min_lr"], 1e-6)
         self.assertEqual(config["weight_decay"], 0.05)
         self.assertEqual(config["hard_label_indices"], [0, 3, 7])
+        self.assertEqual(config["pos_weight_mode"], "ratio")
+        self.assertEqual(config["loss"], "bce")
+
+    def test_transform_is_driven_by_experiment_configuration(self):
+        from torchvision import transforms
+
+        g0 = build_transform(False, input_size=8, config={"augmentation": "G0", "normalization": "imagenet1k"})
+        g1 = build_transform(
+            True,
+            input_size=8,
+            config={
+                "augmentation": "G1",
+                "augmentation_translate": 0.02,
+                "augmentation_scale": [0.98, 1.02],
+                "augmentation_degrees": 3,
+                "color_jitter_brightness": 0.08,
+                "color_jitter_contrast": 0.08,
+                "normalization": "imagenet1k",
+                "horizontal_flip": True,
+            },
+        )
+        autoaug = build_transform(
+            True,
+            input_size=8,
+            config={"augmentation": "AutoAug", "normalization": "imagenet1k"},
+        )
+        self.assertFalse(any(isinstance(op, (transforms.RandomAffine, transforms.ColorJitter)) for op in g0.transforms))
+        self.assertTrue(any(isinstance(op, transforms.RandomAffine) for op in g1.transforms))
+        self.assertTrue(any(isinstance(op, transforms.RandomHorizontalFlip) for op in g1.transforms))
+        self.assertTrue(any(isinstance(op, transforms.AutoAugment) for op in autoaug.transforms))
+
+    def test_dataset_normalization_uses_resize_padded_pixels(self):
+        from cxr_project.dataset import compute_dataset_normalization
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            image_path = root / "train" / "subject" / "study" / "image.png"
+            image_path.parent.mkdir(parents=True)
+            Image.new("RGB", (4, 2), color=(255, 128, 0)).save(image_path)
+            manifest = root / "train.csv"
+            labels = {f"label_{index}": "0" for index in range(10)}
+            with manifest.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["image_path", "Subject_id", "Study_id", "Dicom_id", "ViewPosition", *labels])
+                writer.writeheader()
+                writer.writerow({"image_path": "train/subject/study/image.png", "Subject_id": "subject", "Study_id": "study", "Dicom_id": "image", "ViewPosition": "AP", **labels})
+
+            stats = compute_dataset_normalization(manifest, root, input_size=4)
+            self.assertEqual(stats["images"], 1)
+            self.assertEqual(len(stats["mean"]), 3)
+            self.assertEqual(len(stats["std"]), 3)
+            self.assertTrue(all(value >= 0 for value in stats["std"]))
 
     def test_config_selects_pure_imagenet_22k_convnext_base_weights(self):
         config = load_config(PROJECT_ROOT / "configs" / "g1_seed42.yaml")

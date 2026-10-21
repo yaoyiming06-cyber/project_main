@@ -119,3 +119,22 @@ def compute_pos_weights(studies, cap=20.0) -> list[float]:
         min(cap, negatives[index] / positives[index]) if positives[index] else float(cap)
         for index in range(NUM_LABELS)
     ]
+
+
+def resolve_pos_weights(studies, mode="ratio", cap=20.0, manual=None) -> list[float]:
+    """Resolve the controlled E0 positive-weight variants."""
+    mode = str(mode).strip().lower()
+    if mode == "ratio":
+        return compute_pos_weights(studies, cap=cap)
+    if mode == "unit":
+        return [1.0] * NUM_LABELS
+    if mode == "sqrt":
+        return [weight ** 0.5 for weight in compute_pos_weights(studies, cap=cap)]
+    if mode == "manual":
+        if manual is None or len(manual) != NUM_LABELS:
+            raise ValueError(f"manual pos_weights must contain {NUM_LABELS} values")
+        values = [float(value) for value in manual]
+        if any(value <= 0 for value in values):
+            raise ValueError("manual pos_weights must be positive")
+        return values
+    raise ValueError(f"unsupported pos_weight_mode: {mode!r}")

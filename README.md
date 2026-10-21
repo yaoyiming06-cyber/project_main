@@ -229,46 +229,116 @@ Mac 可用于代码、权重文件和清单检查，但本工程的正式训练�
 | LR / 最小 LR | 1e-3 / 1e-6 |
 | 优化器 / weight decay | AdamW / 0.05 |
 | 标签策略 | E0，`-1` 忽略，空标签按 0 |
-| posweight | 当前训练清单按唯一 Study 自动计算，截断至 20 |
-| 计划增强 | G1；轻微仿射与亮度/对比度变化，不水平翻转 |
+| posweight | 当前训练清单按唯一 Study 自动计算 ratio，截断至 20 |
+| 损失 | 加权 BCE；可切换 Focal，`gamma=2.0` |
+| 计划增强 | G1；轻微仿射与亮度/对比度变化，不水平翻转；可切换 AutoAugment |
+| 归一化 | 默认 ImageNet-1K 统计；可切换为训练清单统计值 |
 | 数据版本 | A_exclude2 清单，排除两张确认损坏训练图 |
 
 按当前训练清单的 18,513 个 train Study、Study batch 2、累积 8 估算，每轮约 1,158 次优化器更新，10 轮约 11,580 次；warmup 5 / 2 / 1 对应约 5,790 / 2,316 / 1,158 次更新。学习率计划已按梯度累积后的优化器更新步数计算。
 
-## 新工程需要的最小改造
+## 新增消融与对照实验
 
-### 1. 让增强策略由配置实际控制
+下面七组实验都使用同一份 `A_exclude2` 清单、ConvNeXt-Base ImageNet-22K 权重、seed42、输入 224、10 epoch、warmup 5、Study batch 2、累积 8、AdamW、LR `1e-3`、weight decay `0.05`、layer decay `0.75`、drop path `0.1` 和 E0 标签口径。每组都必须使用唯一的 `run_name` 和 `output_dir`，从同一份预训练权重独立初始化；只有表中加粗因素改变。
 
-当前 `configs/g1_seed42.yaml` 已经写入 `augmentation`、仿射、色彩变化及 `horizontal_flip` 字段；但 `src/cxr_project/dataset.py` 的 `build_transform()` 目前直接硬编码 G1，训练入口也没有把配置传入变换构建。因此当前 yaml 改为 G0 或修改 G1 数值，都不会按预期改变训练数据。
+| 组别 | 实验名 | 归一化 | 增强 | 损失 | posweight | 目的 |
+|---|---|---|---|---|---|---|
+| 基线 | `G1_seed42_convnext_base_in22k` | ImageNet-1K | G1 | 加权 BCE | ratio | 新 ConvNeXt 工程基准 |
+| 消融 1 | `E0_dataset_norm_seed42` | **训练集 mean/std** | G1 | 加权 BCE | ratio | 检查数据集统计是否优于预训练统计 |
+| 消融 2 | `E0_autoaug_seed42` | ImageNet-1K | **AutoAugment / ImageNet policy** | 加权 BCE | ratio | 检查更强增强的泛化影响 |
+| 消融 3 | `E0_focal_seed42` | ImageNet-1K | G1 | **Focal，gamma=2.0** | ratio | 检查难例聚焦是否改善弱标签表现 |
+| 对照 1 | `E0_unit_posweight_seed42` | ImageNet-1K | G1 | 加权 BCE | **全 1** | 去除类别不平衡加权 |
+| 对照 2 | `E0_sqrt_posweight_seed42` | ImageNet-1K | G1 | 加权 BCE | **sqrt(ratio)** | 减弱自动 ratio 的幅度 |
+| 对照 3 | `E0_manual_posweight_seed42` | ImageNet-1K | G1 | 加权 BCE | **2,1,1,2,1,1,1,2,1,1** | 复核三个困难标签的手动弱加权 |
 
-建议将 `build_transform` 改为接收已加载配置，训练和验证均使用该配置构建变换。训练集仅在 `augmentation: G1` 时按 YAML 值加入 `RandomAffine` 和 `ColorJitter`；仅在 `horizontal_flip: true` 时加入随机翻转。G0 定义为保留 `ResizePadToSquare → ToTensor → ImageNet Normalize`，关闭所有随机变换。验证与测试变换始终确定性。遇到未知 augmentation 名称要直接报错，避免拼写错误静默退回某个策略。
+这里的四组“损失/标签策略”包含 E0 ratio 基线、全 1、sqrt(ratio) 和手动权重四组；前三个新增损失/归一化/增强实验都只改变一项。`AutoAugment` 使用 torchvision 的 `AutoAugmentPolicy.IMAGENET`，它是探索性对照，不能直接当作医学图像的默认增强。数据集归一化统计在训练清单图像经过 `ResizePadToSquare(224)` 和 0 填充后计算，保存在该 run 的 `dataset_normalization.json`，续训复用同一份缓存。
+
+每组的配置覆盖如下；未列出的字段沿用 `configs/g1_seed42.yaml`：
+
+```yaml
+# E0_dataset_norm_seed42
+run_name: E0_dataset_norm_seed42
+output_dir: runs/E0_dataset_norm_seed42
+normalization: dataset
+
+# E0_autoaug_seed42
+run_name: E0_autoaug_seed42
+output_dir: runs/E0_autoaug_seed42
+augmentation: AutoAug
+
+# E0_focal_seed42
+run_name: E0_focal_seed42
+output_dir: runs/E0_focal_seed42
+loss: focal
+focal_gamma: 2.0
+
+# E0_unit_posweight_seed42
+run_name: E0_unit_posweight_seed42
+output_dir: runs/E0_unit_posweight_seed42
+pos_weight_mode: unit
+manual_pos_weights: null
+
+# E0_sqrt_posweight_seed42
+run_name: E0_sqrt_posweight_seed42
+output_dir: runs/E0_sqrt_posweight_seed42
+pos_weight_mode: sqrt
+manual_pos_weights: null
+
+# E0_manual_posweight_seed42
+run_name: E0_manual_posweight_seed42
+output_dir: runs/E0_manual_posweight_seed42
+pos_weight_mode: manual
+manual_pos_weights: [2, 1, 1, 2, 1, 1, 1, 2, 1, 1]
+```
+
+运行顺序建议先完成 `E0_seed42`，再依次执行三组消融，最后执行三组 posweight 对照。主指标仍是固定 valid 上的十标签 macro AUC；只有 seed42 筛选出候选后，才用 seed2027 和 3407 做复核。不要用 test 结果挑选配置，也不要把旧 EVA-X-S 的 AUC 与此 ConvNeXt 工程直接排序。
+
+## 参数复核结论
+
+- `AdamW`、layer decay `0.75`、drop path `0.1`、有效 Study batch `16` 和 5 epoch warmup 是合理的首轮迁移学习起点，适合先冻结协议做基线。
+- 全量微调 ConvNeXt-Base 时 LR `1e-3` 偏激进，它沿用了旧 EVA-X-S 网格，不能预先视为新骨干最优值。若基线出现 loss 爆炸、AUC 早期下降或梯度频繁裁切，应优先补做 LR `2e-4` 或 `5e-4`，并保持其它条件不变。
+- 当前 `clip_grad: null` 表示不裁切；这适合先观察原始训练稳定性。若出现非有限 loss 或梯度尖峰，可单独设 `clip_grad: 1.0` 做稳定性对照，但不能把裁切和其它消融同时改变。
+- `batch_size_studies: 2`、`accum_steps: 8` 在显存不足时可以改成 `1/16`，尽量保持有效 batch 和每轮更新次数；`image_chunk_size: 2` 与 gradient checkpointing 已经承担主要显存控制。
+- ImageNet-1K 统计是当前预训练权重的匹配输入，数据集 mean/std 和 AutoAugment 都是待验证的消融项；它们不应默认替换基线。
+
+## 当前实现状态
+
+`build_transform()` 已由配置驱动：G0 关闭随机增强，G1 读取 YAML 中的仿射、色彩和翻转参数，AutoAugment 使用 ImageNet policy；验证始终不使用随机增强。训练入口支持 `normalization: dataset`、`loss: focal`、`pos_weight_mode: ratio/unit/sqrt/manual`，并把清单 SHA-256、Git revision、实际权重、损失和归一化信息写入 `run_manifest.json`。未知策略、缺失手动权重和非法数值会在启动时直接报错。
+
+## 后续实验与记录清单
+
+### 1. 配置入口已冻结
+
+上述配置入口已经接入训练；后续改造重点是完成七组实验并保存每组的 run manifest，而不是继续扩大一次性网格。
+
+`build_transform` 接收已加载配置，训练集按 `augmentation` 选择 G0、G1 或 AutoAugment，并按 `normalization` 选择 ImageNet 或缓存的数据集统计；验证变换始终确定性。遇到未知策略会直接报错。
 
 相关文件：
 
 - `src/cxr_project/dataset.py`：变换策略与配置参数。
-- `src/cxr_project/train.py`：把已加载配置传给 train/valid transform 构造。
-- `tests/`：验证 YAML 中的 G1 参数确实体现在实际 transform；G0 没有随机变换；可额外验证 G1 打开水平翻转开关后才出现翻转操作。
-- `configs/`：增加 G0 配置，或采用明确的基线配置覆盖；实验名和输出目录必须唯一。
+- `src/cxr_project/train.py`：计算/缓存数据集统计，解析损失和 posweight 策略，并写入实验指纹。
+- `tests/`：覆盖 G0/G1/AutoAugment、数据集统计、Focal mask 和四种 posweight 策略。
+- `configs/`：复制基线后只修改单个实验因素；实验名和输出目录必须唯一。
 
 G0 与 G1 的对照采用相同骨干权重、数据清单、标签策略、posweight、优化器、seed、epoch、warmup、batch 和 LR，只改变训练随机增强。
 
 ### 2. 增加受控实验配置，而不是一次性穷举全网格
 
-当前只有 `configs/g1_seed42.yaml` 和 `scripts/run_g1_seed42.ps1`。不必先改训练算法或增加复杂网格调度器；先增加可审阅的单实验 YAML 配置，每次单独启动一次训练。配置必须设置不同的 `run_name` 和 `output_dir`，防止结果覆盖。
+当前保留 `configs/g1_seed42.yaml` 和 `scripts/run_g1_seed42.ps1` 作为基线入口。七组实验先复制基线 YAML 后单独启动，每次设置不同的 `run_name` 和 `output_dir`，防止结果覆盖。
 
 建议配置顺序：
 
-1. **修复并冻结 G1 定义**：确认 `G1` 使用当前 YAML 中的 `degrees=3`、`translate=0.02`、`scale=0.98–1.02`、brightness/contrast `0.08`、不翻转。
+1. **冻结 G1 定义**：`degrees=3`、`translate=0.02`、`scale=0.98–1.02`、brightness/contrast `0.08`、不翻转。
 2. **新架构基线**：G1、LR 1e-3、10 轮、warmup 5、E0、自动 posweight，分别训练 seed42、2027、3407。网格图所记完成状态均为待补做；现有单配置仅是 seed42 模板，不是已经完成的模型结果。
 3. **G0 vs G1**：先以 seed42 做同条件对照。若差异值得追踪，再以 seed2027、3407 重复胜出方案；不要把多个 seed 与增强因素同时改变。
 4. **warmup 单因素**：固定 G1、LR 1e-3、10 轮和其它所有配置，用 seed42 分别比较 warmup1、warmup2 与 warmup5 基线。选择有一致收益且训练稳定的方案后，再补另两种 seed。
-5. **再评估其它方向**：只有新基线和上述筛选完成后，才决定是否在 ConvNeXt 上重做 LR、G2、G3 或损失策略。不要把旧 EVA-X 的 AUC 当作新模型实验数据。
+5. **完成本页七组实验后再扩展**：只有新基线、三组消融和三组 posweight 对照完成后，才决定是否在 ConvNeXt 上重做 LR、G2、G3、其它 Focal gamma 或视角专家。不要把旧 EVA-X 的 AUC 当作新模型实验数据。
 
-建议配置文件名示例：`g0_seed42.yaml`、`g1_seed2027.yaml`、`g1_seed3407.yaml`、`g1_warmup1_seed42.yaml`、`g1_warmup2_seed42.yaml`。可以复制现有 YAML 后只修改实验因素、seed、`run_name` 和 `output_dir`；后续若配置数量增加，再考虑写参数化 launcher。
+建议配置文件名：`e0_dataset_norm_seed42.yaml`、`e0_autoaug_seed42.yaml`、`e0_focal_seed42.yaml`、`e0_unit_posweight_seed42.yaml`、`e0_sqrt_posweight_seed42.yaml`、`e0_manual_posweight_seed42.yaml`。可以复制现有 YAML 后只修改实验因素、`run_name` 和 `output_dir`；后续若配置数量增加，再考虑写参数化 launcher。
 
 ### 3. 记录规则与实验判定
 
-每次 run 应保存完整配置副本和 manifest；保留逐 epoch 验证 AUC、最佳 epoch、逐标签 AUC、数据清单版本、预训练权重 SHA-256、代码版本和 seed。当前代码会保存配置副本、运行 manifest、训练/验证清单路径与样本数，以及预训练权重 SHA-256；尚未记录清单文件 SHA-256 和 Git 代码版本。若要让网格结果可精确复现，建议后续给 manifest 增加这两个字段。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
+每次 run 应保存完整配置副本和 manifest；当前代码会保存逐 epoch 验证 AUC、最佳 epoch、逐标签 AUC、数据清单路径与 SHA-256、预训练权重 SHA-256、Git revision、损失、posweight 和归一化信息。不得复用输出目录。重跑实验要换新的 run 名称，并注明重跑原因。
 
 筛选时先看十标签 macro AUC，再看三种子均值和标准差、各标签变化与训练稳定性。单个 seed 的小幅提升只作候选，不称为稳定提升；需要 seed42 筛选的候选，使用 2027 和 3407 做受控复核。相同验证集上的很多轮筛选会逐渐过拟合验证集，所以先按上述少量单因素对照推进。
 
@@ -276,9 +346,10 @@ G0 与 G1 的对照采用相同骨干权重、数据清单、标签策略、posw
 
 ## 开始实验前检查
 
-- [ ] `project_main` 中 G0/G1 实际变换已由配置控制，G0 测试确认无随机操作。
-- [ ] G1 的运行 transform 与配置字段一致；水平翻转默认关闭。
+- [x] `project_main` 中 G0/G1/AutoAugment 实际变换已由配置控制，G0 测试确认无随机操作。
+- [x] G1 的运行 transform 与配置字段一致；水平翻转默认关闭。
+- [x] dataset normalization、Focal loss 和四种 posweight 策略已经有配置入口和合同测试。
 - [ ] train/valid/test 使用同一份锁定的数据清单版本，test 不进入训练或筛选。
 - [ ] ConvNeXt-Base 权重文件 SHA-256 校验通过，模型标识为 `convnext_base.fb_in22k`。
 - [ ] 每个 seed、增强、warmup 组合使用唯一输出目录。
-- [ ] 开跑前记录 run 配置、数据版本、代码版本和预期 seed。
+- [x] 开跑前记录 run 配置、数据版本、代码版本和预期 seed。

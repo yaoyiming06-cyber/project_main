@@ -7,7 +7,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from cxr_project.manifest import compute_pos_weights, read_study_manifest
+from cxr_project.manifest import compute_pos_weights, read_study_manifest, resolve_pos_weights
 
 try:
     import torch
@@ -88,6 +88,22 @@ class ManifestContractsTest(unittest.TestCase):
             self.assertEqual(weights[0], 2.0)
             self.assertTrue(all(weight == 20.0 for weight in weights[1:]))
 
+    def test_controlled_positive_weight_modes_are_deterministic(self):
+        studies = []
+        for index in range(3):
+            labels = [0] * 10
+            labels[0] = 1 if index == 0 else 0
+            studies.append(type("Study", (), {"study_id": str(index), "labels": tuple(labels)})())
+
+        self.assertEqual(resolve_pos_weights(studies, mode="unit"), [1.0] * 10)
+        ratio = resolve_pos_weights(studies, mode="ratio", cap=20.0)
+        square_root = resolve_pos_weights(studies, mode="sqrt", cap=20.0)
+        self.assertEqual(square_root[0], ratio[0] ** 0.5)
+        self.assertEqual(
+            resolve_pos_weights(studies, mode="manual", manual=[2, 1, 1, 2, 1, 1, 1, 2, 1, 1]),
+            [2, 1, 1, 2, 1, 1, 1, 2, 1, 1],
+        )
+
 
 @unittest.skipUnless(TORCH_AVAILABLE, "PyTorch is installed on Windows for loss contract tests")
 class LossContractsTest(unittest.TestCase):
@@ -112,6 +128,30 @@ class LossContractsTest(unittest.TestCase):
 
         torch.testing.assert_close(combined_logits[:, 1], main_logits.detach()[:, 1])
         torch.testing.assert_close(combined_logits[:, 0], torch.zeros(2))
+        torch.testing.assert_close(main_logits.grad[:, 0], torch.zeros(2))
+        torch.testing.assert_close(expert_logits.grad[:, 0], torch.zeros(2))
+
+    def test_focal_loss_preserves_uncertain_target_mask(self):
+        from cxr_project.losses import compute_training_loss
+
+        main_logits = torch.zeros((2, 10), requires_grad=True)
+        expert_logits = torch.zeros((2, 3), requires_grad=True)
+        targets = torch.zeros((2, 10))
+        targets[:, 0] = -1
+        pos_weights = torch.ones(10)
+
+        loss, _ = compute_training_loss(
+            main_logits,
+            expert_logits,
+            targets,
+            pos_weights,
+            hard_label_indices=(0, 3, 7),
+            expert_loss_weight=0.5,
+            loss_name="focal",
+            focal_gamma=2.0,
+        )
+        loss.backward()
+
         torch.testing.assert_close(main_logits.grad[:, 0], torch.zeros(2))
         torch.testing.assert_close(expert_logits.grad[:, 0], torch.zeros(2))
 
