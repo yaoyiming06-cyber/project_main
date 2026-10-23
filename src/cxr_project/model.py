@@ -88,15 +88,30 @@ class ConvNeXtStudyClassifier(nn.Module):
         if backbone is None:
             import timm
 
-            network = timm.create_model(
-                MODEL_NAME,
-                pretrained=False,
-                num_classes=PRETRAINED_NUM_CLASSES,
-                drop_path_rate=float(drop_path),
-            )
             if pretrained:
+                weights_path = Path(pretrained_checkpoint) if pretrained_checkpoint else None
+                if weights_path is None or not weights_path.is_file():
+                    raise FileNotFoundError(
+                        f"ImageNet-22K weights not found: {weights_path}; run scripts/download_weights.py"
+                    )
+                # timm registers weights-only variants only when a pretrained
+                # config is requested; point timm at the verified local file.
+                network = timm.create_model(
+                    MODEL_NAME,
+                    pretrained=True,
+                    pretrained_cfg_overlay={"file": str(weights_path)},
+                    num_classes=PRETRAINED_NUM_CLASSES,
+                    drop_path_rate=float(drop_path),
+                )
                 network.load_state_dict(
                     load_imagenet_22k_state_dict(pretrained_checkpoint), strict=True,
+                )
+            else:
+                network = timm.create_model(
+                    MODEL_NAME,
+                    pretrained=False,
+                    num_classes=PRETRAINED_NUM_CLASSES,
+                    drop_path_rate=float(drop_path),
                 )
             network.reset_classifier(0)
             backbone = network

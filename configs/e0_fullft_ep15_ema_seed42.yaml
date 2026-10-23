@@ -1,0 +1,56 @@
+run_name: E0_fullft_ep15_ema_seed42
+seed: 42
+model: convnext_base.fb_in22k
+pretrained: true
+pretrained_checkpoint: weights/convnext_base.fb_in22k.safetensors
+
+input_size: 224
+epochs: 15
+warmup_epochs: 5
+batch_size_studies: 2
+accum_steps: 8
+lr: 0.0005
+min_lr: 0.000001
+weight_decay: 0.05
+layer_decay: 0.75
+drop_path: 0.1
+clip_grad: 1.0
+
+optimizer: adamw
+num_workers: 2
+pin_memory: true
+amp: true
+gradient_checkpointing: true
+image_chunk_size: 2
+
+ema: true
+ema_decay: 0.9998
+early_stopping_patience: 4
+early_stopping_min_delta: 0.0005
+freeze_backbone: false
+
+label_strategy: E0
+blank_policy: zero
+uncertain_policy: ignore
+pos_weight_mode: ratio
+manual_pos_weights: null
+loss: bce
+focal_gamma: 2.0
+max_pos_weight: 20.0
+hard_label_indices: [0, 3, 7]
+expert_loss_weight: 0.5
+
+augmentation: G1
+augmentation_translate: 0.02
+augmentation_scale: [0.98, 1.02]
+augmentation_degrees: 3
+color_jitter_brightness: 0.08
+color_jitter_contrast: 0.08
+horizontal_flip: false
+normalization: imagenet1k
+
+image_root: ../cxr_first
+train_manifest: data/manifests/train_manifest.csv
+valid_manifest: data/manifests/valid_manifest.csv
+test_manifest: data/manifests/test_manifest.csv
+output_dir: runs/E0_fullft_ep15_ema_seed42

@@ -1,15 +1,22 @@
+param(
+    [string]$DataRoot
+)
+
 $ErrorActionPreference = "Stop"
 
 $ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $PythonPath = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
-$DataRoot = (Resolve-Path (Join-Path $ProjectRoot "..\cxr_first")).Path
+if ([string]::IsNullOrWhiteSpace($DataRoot)) {
+    $DataRoot = Join-Path $ProjectRoot "..\cxr_first"
+}
 
 if (-not (Test-Path $PythonPath)) {
     throw "Project environment is missing. Run scripts\setup_windows_cuda.ps1 first."
 }
 if (-not (Test-Path $DataRoot)) {
-    throw "Could not find the image tree at $DataRoot. Keep project_main beside cxr_first or pass --data-root manually."
+    throw "Could not find the image tree at $DataRoot. Keep project_main beside cxr_first or pass -DataRoot explicitly."
 }
+$DataRoot = (Resolve-Path $DataRoot).Path
 
 Push-Location $ProjectRoot
 try {

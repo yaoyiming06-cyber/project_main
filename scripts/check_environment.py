@@ -32,6 +32,10 @@ def main():
     print(f"scikit-learn: {sklearn.__version__}")
     print(f"PyYAML:       {yaml.__version__}")
     print(f"Pillow:       {Image.__version__}")
+    if timm.__version__ != "1.0.30":
+        problems.append(f"timm 1.0.30 is required; found {timm.__version__}")
+    if "convnext_base.fb_in22k" not in timm.list_models(pretrained=True):
+        problems.append("timm does not register convnext_base.fb_in22k")
     print(f"CUDA build:   {torch.version.cuda}")
     print(f"CUDA visible: {torch.cuda.is_available()}")
     if torch.cuda.is_available():

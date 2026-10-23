@@ -9,7 +9,7 @@ import json
 import math
 import random
 import time
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +36,50 @@ from .provenance import (
     validate_dataset_normalization_cache,
 )
 from .schedule import scheduler_step_counts
+
+
+class ModelEMA:
+    """Keep a moving-average copy of model state for validation and inference."""
+
+    def __init__(self, model, decay=0.9998):
+        if not 0.0 < float(decay) < 1.0:
+            raise ValueError("ema_decay must be between 0 and 1")
+        self.decay = float(decay)
+        self.shadow = {
+            key: value.detach().clone()
+            for key, value in model.state_dict().items()
+        }
+
+    def reset(self, model):
+        self.shadow = {
+            key: value.detach().clone()
+            for key, value in model.state_dict().items()
+        }
+
+    def update(self, model):
+        with torch.no_grad():
+            for key, value in model.state_dict().items():
+                if value.is_floating_point():
+                    self.shadow[key].mul_(self.decay).add_(value.detach(), alpha=1.0 - self.decay)
+                else:
+                    self.shadow[key] = value.detach().clone()
+
+    def state_dict(self):
+        return {key: value.detach().clone() for key, value in self.shadow.items()}
+
+    def load_state_dict(self, state):
+        if set(state) != set(self.shadow):
+            raise ValueError("EMA state does not match model state")
+        self.shadow = {key: value.detach().clone() for key, value in state.items()}
+
+    @contextmanager
+    def use(self, model):
+        raw_state = {key: value.detach().clone() for key, value in model.state_dict().items()}
+        model.load_state_dict(self.shadow, strict=True)
+        try:
+            yield
+        finally:
+            model.load_state_dict(raw_state, strict=True)
 
 
 def set_seed(seed: int):
@@ -180,8 +224,10 @@ def _plain_config(config):
 
 
 def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
-                 epoch, global_step, total_steps, warmup_steps, pos_weights):
+                 epoch, global_step, total_steps, warmup_steps, pos_weights, ema=None):
     model.train()
+    if bool(config.get("freeze_backbone", False)):
+        model.backbone.eval()
     optimizer.zero_grad(set_to_none=True)
     running_loss = 0.0
     seen_studies = 0
@@ -231,6 +277,8 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
                 torch.nn.utils.clip_grad_norm_(model.parameters(), float(clip_grad))
             scaler.step(optimizer)
             scaler.update()
+            if ema is not None:
+                ema.update(model)
             optimizer.zero_grad(set_to_none=True)
             global_step += 1
 
@@ -314,6 +362,9 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         gradient_checkpointing=bool(config["gradient_checkpointing"]),
         image_chunk_size=int(config["image_chunk_size"]),
     ).to(device)
+    if bool(config.get("freeze_backbone", False)):
+        for parameter in model.backbone.parameters():
+            parameter.requires_grad = False
     optimizer = build_optimizer(
         model,
         lr=float(config["lr"]),
@@ -321,6 +372,11 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         layer_decay=float(config["layer_decay"]),
     )
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and bool(config["amp"]))
+    ema = ModelEMA(model, float(config.get("ema_decay", 0.9998))) if bool(config.get("ema", False)) else None
+    ema_start_epoch = int(config.get("ema_start_epoch", 1))
+    if ema_start_epoch < 1:
+        raise ValueError("ema_start_epoch must be at least 1")
+    ema_active = False
 
     (run_dir / "config_resolved.yaml").write_text(
         Path(config_path).read_text(encoding="utf-8"), encoding="utf-8",
@@ -329,6 +385,11 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     global_step = 0
     best_auc = float("-inf")
     best_epoch = None
+    bad_epochs = 0
+    early_stopping_patience = int(config.get("early_stopping_patience", 0))
+    early_stopping_min_delta = float(config.get("early_stopping_min_delta", 0.0))
+    if early_stopping_patience < 0 or early_stopping_min_delta < 0:
+        raise ValueError("early stopping settings must be non-negative")
     if resume:
         resume_path = Path(resume).resolve()
         checkpoint = torch.load(resume_path, map_location=device, weights_only=False)
@@ -336,10 +397,14 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         optimizer.load_state_dict(checkpoint["optimizer"])
         if checkpoint.get("scaler"):
             scaler.load_state_dict(checkpoint["scaler"])
+        if ema is not None and checkpoint.get("ema") is not None:
+            ema.load_state_dict(checkpoint["ema"])
+            ema_active = bool(checkpoint.get("ema_active", False))
         start_epoch = int(checkpoint["epoch"]) + 1
         global_step = int(checkpoint.get("global_step", 0))
         best_auc = float(checkpoint.get("best_auc", float("-inf")))
         best_epoch = checkpoint.get("best_epoch")
+        bad_epochs = int(checkpoint.get("bad_epochs", 0))
         if resume_path.parent != run_dir:
             previous_best = resume_path.parent / "checkpoint-best.pth"
             previous_predictions = resume_path.parent / "valid_best_predictions.csv"
@@ -395,6 +460,11 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
             "resumed_from": str(Path(resume).resolve()) if resume else None,
         },
         "device": str(device),
+        "ema": {
+            "enabled": ema is not None,
+            "decay": ema.decay if ema is not None else None,
+            "start_epoch": ema_start_epoch if ema is not None else None,
+        },
         "git": git_state,
         "git_revision": git_state["revision"],
         "started_at_unix": time.time(),
@@ -409,13 +479,19 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
 
     try:
         for epoch in range(start_epoch, int(config["epochs"])):
+            if ema is not None and not ema_active and epoch + 1 >= ema_start_epoch:
+                ema.reset(model)
+                ema_active = True
             train_loss, global_step = _train_epoch(
                 model, train_loader, len(train_data), optimizer, scaler, device, config,
                 epoch, global_step, total_steps, warmup_steps, pos_weights,
+                ema if ema_active else None,
             )
-            val_metrics, study_ids, targets, probabilities = evaluate(
-                model, valid_loader, device, bool(config["amp"]),
-            )
+            validation_context = ema.use(model) if ema_active else nullcontext()
+            with validation_context:
+                val_metrics, study_ids, targets, probabilities = evaluate(
+                    model, valid_loader, device, bool(config["amp"]),
+                )
             score = val_metrics["macro_auc"]
             if score is None:
                 raise RuntimeError("validation macro AUC is undefined; every label needs positive and negative Studies")
@@ -428,12 +504,22 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
             with metrics_path.open("a", encoding="utf-8", newline="") as handle:
                 csv.DictWriter(handle, fieldnames=fields).writerow(row)
 
+            previous_best = best_auc
+            is_best = score >= best_auc
+            if is_best:
+                best_auc = score
+                best_epoch = epoch
+            meaningful_improvement = previous_best == float("-inf") or score > previous_best + early_stopping_min_delta
+            bad_epochs = 0 if meaningful_improvement else bad_epochs + 1
             checkpoint = {
                 "epoch": epoch,
                 "global_step": global_step,
-                "best_auc": max(best_auc, score),
-                "best_epoch": epoch if score >= best_auc else best_epoch,
+                "best_auc": best_auc,
+                "best_epoch": best_epoch,
+                "bad_epochs": bad_epochs,
                 "model": model.state_dict(),
+                "ema": ema.state_dict() if ema is not None else None,
+                "ema_active": ema_active,
                 "optimizer": optimizer.state_dict(),
                 "scaler": scaler.state_dict(),
                 "pos_weights": pos_weights_list,
@@ -441,9 +527,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
                 "config": _plain_config(config),
             }
             torch.save(checkpoint, run_dir / "checkpoint-last.pth")
-            if score >= best_auc:
-                best_auc = score
-                best_epoch = epoch
+            if is_best:
                 torch.save(checkpoint, run_dir / "checkpoint-best.pth")
                 _write_validation_predictions(
                     run_dir / "valid_best_predictions.csv", study_ids, targets, probabilities,
@@ -451,6 +535,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
             run_manifest["last_epoch"] = epoch + 1
             run_manifest["best_epoch"] = best_epoch + 1 if best_epoch is not None else None
             run_manifest["best_macro_auc"] = best_auc
+            run_manifest["early_stopping_bad_epochs"] = bad_epochs
             run_manifest["last_validation"] = val_metrics
             _write_json(run_dir / "run_manifest.json", run_manifest)
             print(
@@ -458,6 +543,12 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
                 f"val_macro_auc={score:.5f} best={best_auc:.5f}",
                 flush=True,
             )
+            if early_stopping_patience and bad_epochs >= early_stopping_patience:
+                print(
+                    f"early stopping after {bad_epochs} epochs without improvement",
+                    flush=True,
+                )
+                break
         run_manifest["status"] = "completed"
     except BaseException as error:
         run_manifest["status"] = "failed"

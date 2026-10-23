@@ -108,6 +108,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\setup_windows_cuda.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\run_g1_seed42.ps1
 ```
 
+当前图片目录若不在 `project_main` 同级位置，可传入实际路径：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\run_g1_seed42.ps1 `
+  -DataRoot 'D:\project\race_dataset\cxr_first\cxr_first'
+```
+
 也可以直接调用训练模块：
 
 ```powershell
