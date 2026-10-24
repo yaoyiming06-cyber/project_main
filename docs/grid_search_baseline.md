@@ -1,3 +1,5 @@
+> 状态说明（2026-10-24）：本文保留2026-10-21的历史实验说明。新的可执行配方、接口状态和Windows运行命令以 [docs/grid_interfaces.md](grid_interfaces.md) 与 [当前实验总表](experiments/imagenet_grid_draft/ImageNet训练网格汇总.csv) 为准。
+
 # 训练网格基础文档
 
 更新时间：2026-10-21  
@@ -8,7 +10,7 @@
 
 本文把旧版训练网格的结果和状态归档下来，并给出新 `project_main` 的实验顺序。旧实验与新工程使用不同骨干、预训练权重和训练实现，旧 AUC 只用来决定哪些方向值得验证；不能把旧 AUC 与新模型 AUC 直接排序，也不应从旧模型断点续训新架构。新工程每个实验都从 ConvNeXt-Base 的 ImageNet-22K 权重和新分类头初始化。
 
-统一主指标为固定验证集上的十标签 macro AUC。表中 `*` 表示单病种 AUC，不能与十标签 macro AUC 比较。测试集仅在方案冻结后用于最终评测，不能用来筛选实验或阈值。验证集和数据清单应固定为 `project_main/data/manifests/` 当前版本；数据版本变化时要作为新实验批次记录。本工程目前没有比赛测试集预测或 submission 导出入口，因此测试集规则是后续评测流程要求，不代表当前训练入口已能执行测试预测。
+统一主指标为固定验证集上的十标签 macro AUC。表中 `*` 表示单病种 AUC，不能与十标签 macro AUC 比较。测试集仅在方案冻结后用于最终评测，不能用来筛选实验或阈值。验证集和数据清单应固定为 `project_main/data/manifests/` 当前版本；数据版本变化时要作为新实验批次记录。工程现已提供 `scripts/predict_test.py` 和 `scripts/export_competition_submission.py`；测试集只能在方案冻结后使用，不能用于筛选实验或阈值。
 
 ## 旧版实验结果与网格状态
 

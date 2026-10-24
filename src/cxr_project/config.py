@@ -4,6 +4,7 @@ import math
 from pathlib import Path
 
 import yaml
+from .grid_options import DEFAULTS, OPTIONAL_KEYS, validate_options
 
 
 REQUIRED_KEYS = {
@@ -47,6 +48,10 @@ def load_config(path):
     if not isinstance(config, dict):
         raise ValueError(f"config must contain a YAML mapping: {path}")
     _validate_finite_values(config)
+    unknown = set(config) - REQUIRED_KEYS - OPTIONAL_KEYS
+    if unknown:
+        raise ValueError(f"unknown config keys: {sorted(unknown)}")
+    config = {**DEFAULTS, **config}
     missing = REQUIRED_KEYS - set(config)
     if missing:
         raise ValueError(f"{path} is missing config keys: {sorted(missing)}")
@@ -61,8 +66,8 @@ def load_config(path):
         if key in config and config[key] is not None:
             config[key] = _finite_float(config, key)
 
-    for key in ("input_size", "epochs", "batch_size_studies", "accum_steps", "num_workers"):
-        if int(config[key]) < 1:
+    for key in ("input_size", "epochs", "batch_size_studies", "accum_steps"):
+        if type(config[key]) is not int or config[key] < 1:
             raise ValueError(f"{key} must be at least 1")
     if int(config["warmup_epochs"]) < 0 or int(config["warmup_epochs"]) >= int(config["epochs"]):
         raise ValueError("warmup_epochs must be non-negative and less than epochs")
@@ -89,8 +94,8 @@ def load_config(path):
         raise ValueError("this training entry point only implements uncertain_policy ignore")
     if str(config["optimizer"]).lower() != "adamw":
         raise ValueError("only the configured AdamW optimizer is supported")
-    if str(config["loss"]).lower() not in {"bce", "focal"}:
-        raise ValueError("loss must be 'bce' or 'focal'")
+    if str(config["loss"]).lower() not in {"bce", "focal", "asl"}:
+        raise ValueError("loss must be bce, focal, or asl")
     if str(config["pos_weight_mode"]).lower() not in {"ratio", "unit", "sqrt", "manual"}:
         raise ValueError("pos_weight_mode must be ratio, unit, sqrt, or manual")
     manual_weights = config["manual_pos_weights"]
@@ -105,9 +110,9 @@ def load_config(path):
         config["manual_pos_weights"] = manual_weights
     if config["clip_grad"] is not None and float(config["clip_grad"]) <= 0:
         raise ValueError("clip_grad must be positive or null")
-    if str(config["augmentation"]).upper() not in {"G0", "G1", "AUTOAUG"}:
-        raise ValueError("augmentation must be G0, G1, or AutoAug")
-    scale = config.get("augmentation_scale", (0.98, 1.02))
+    if str(config["augmentation"]).upper() not in {"G0", "G1", "G2", "G3", "AUTOAUG"}:
+        raise ValueError("augmentation must be G0, G1, G2, G3, or AutoAug")
+    scale = config.get("augmentation_scale", (0.95, 1.05) if str(config["augmentation"]).upper() == "G2" else (0.98, 1.02))
     if not isinstance(scale, (list, tuple)) or len(scale) != 2:
         raise ValueError("augmentation_scale must be a finite increasing positive pair")
     try:
@@ -125,18 +130,15 @@ def load_config(path):
     ):
         if key in config and config[key] is not None and float(config[key]) < 0:
             raise ValueError(f"{key} must be non-negative")
-    if str(config["normalization"]).lower() not in {"imagenet1k", "dataset"}:
-        raise ValueError("normalization must be imagenet1k or dataset")
+    if str(config["normalization"]).lower() not in {"imagenet1k", "dataset", "pretrained"}:
+        raise ValueError("normalization must be imagenet1k, pretrained, or dataset")
     if int(config["image_chunk_size"]) < 1:
         raise ValueError("image_chunk_size must be at least 1")
     if str(config["pos_weight_mode"]).lower() == "manual" and manual_weights is None:
         raise ValueError("manual pos_weight_mode requires manual_pos_weights")
-    if not config["hard_label_indices"] or any(
-        int(index) not in range(10) for index in config["hard_label_indices"]
-    ):
-        raise ValueError("hard_label_indices must be non-empty and within 0..9")
+    validate_options(config)
     config["_config_path"] = path
-    config["_project_root"] = path.parent.parent
+    config["_project_root"] = Path(config["project_root"]).expanduser().resolve() if config["project_root"] else path.parent.parent
     return config
 
 

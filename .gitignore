@@ -1,8 +1,10 @@
 .venv/
 __pycache__/
+.DS_Store
 *.py[cod]
 weights/*.pth
 weights/*.safetensors
 weights/*.tmp
 runs/
+run/
 *.log

@@ -1,0 +1,11 @@
+﻿标签索引,标签,英文标签,主分类头,标签专家头,当前实现与预测方式,训练证据,R0_seed42验证AUC_六位近似,已验证专家收益,下一步实验,独立小样本架构状态
+0,纵隔增宽,Enlarged Cardiomediastinum,共同预测全部10标签,已实现且参与训练,共享ConvNeXt；MLP 1024→256→1；主头与专家logit等权平均后sigmoid；辅助BCE权重0.5,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.723678,尚无受控消融结论,M1移除专家；M2辅助权重0.25,AF0/AF1 AdaptFormer接口已实现；尚无新训练证据
+1,气胸,Pneumothorax,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.83575,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+2,肺实变,Consolidation,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.796339,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+3,肺炎,Pneumonia,共同预测全部10标签,已实现且参与训练,共享ConvNeXt；MLP 1024→256→1；主头与专家logit等权平均后sigmoid；辅助BCE权重0.5,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.746997,尚无受控消融结论,M1移除专家；M2辅助权重0.25,AF0/AF1 AdaptFormer接口已实现；尚无新训练证据
+4,肺水肿,Edema,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.882194,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+5,心影增大,Cardiomegaly,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.791818,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+6,肺不张,Atelectasis,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.786483,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+7,肺部阴影,Lung Opacity,共同预测全部10标签,已实现且参与训练,共享ConvNeXt；MLP 1024→256→1；主头与专家logit等权平均后sigmoid；辅助BCE权重0.5,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.717529,尚无受控消融结论,M1移除专家；M2辅助权重0.25,AF0/AF1 AdaptFormer接口已实现；尚无新训练证据
+8,胸腔积液,Pleural Effusion,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.906771,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据
+9,无异常,No Finding,共同预测全部10标签,未设置独立专家头,共享ConvNeXt特征；主头输出,"R0保存配置hard_label_indices=[0,3,7]；expert_loss_weight=0.5",0.880137,尚无受控消融结论,跟踪逐标签AUC，按实证复核分组,AF0/AF1接口仅覆盖标签0/3/7；尚无新训练证据

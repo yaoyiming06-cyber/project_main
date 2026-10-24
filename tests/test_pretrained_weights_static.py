@@ -26,10 +26,12 @@ class PretrainedWeightsConfigTest(unittest.TestCase):
         self.assertIn("network.reset_classifier(0)", model)
 
     def test_layer_decay_levels_follow_timm_stem_and_four_stages(self):
-        training = (PROJECT_ROOT / "src" / "cxr_project" / "train.py").read_text(encoding="utf-8")
-        self.assertIn('parts[1] == "stem"', training)
-        self.assertIn('parts[1] == "stages"', training)
-        self.assertIn("max_layer = 5", training)
+        from cxr_project.train import _optimizer_layer_id
+        self.assertEqual(_optimizer_layer_id("backbone.stem.0.weight"), 0)
+        self.assertEqual(_optimizer_layer_id("backbone.stages.3.blocks.0.weight"), 4)
+        self.assertEqual(_optimizer_layer_id("backbone.layers.2.blocks.0.weight"), 3)
+        self.assertEqual(_optimizer_layer_id("backbone.blocks.11.norm.weight", 13), 12)
+        self.assertEqual(_optimizer_layer_id("main_head.2.weight", 13), 13)
 
 
 if __name__ == "__main__":

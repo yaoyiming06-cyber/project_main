@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
+from dataclasses import replace
 
 import numpy as np
 import torch
@@ -12,6 +13,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 
 from .labels import VIEW_TO_ID, normalize_view_position
+from .augmentation import CLAHE, RandomGamma
 from .manifest import StudyRecord, read_study_manifest
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
@@ -58,11 +60,18 @@ def build_transform(
     """
     config = config or {}
     augmentation = str(config.get("augmentation", "G1")).strip().upper()
-    if augmentation not in {"G0", "G1", "AUTOAUG"}:
+    if augmentation not in {"G0", "G1", "G2", "G3", "AUTOAUG"}:
         raise ValueError(f"unsupported augmentation strategy: {augmentation!r}")
 
     normalization_name = str(config.get("normalization", "imagenet1k")).strip().lower()
-    if normalization_name == "imagenet1k":
+    if normalization_name == "pretrained":
+        import timm
+        name = config.get("model", "convnext_base.fb_in22k")
+        pretrained_cfg = timm.models.get_pretrained_cfg(name)
+        if pretrained_cfg is None:
+            raise ValueError(f"No pretrained normalization registered for {name}")
+        mean, std = pretrained_cfg.mean, pretrained_cfg.std
+    elif normalization_name == "imagenet1k":
         mean = IMAGENET_MEAN
         std = IMAGENET_STD
     elif normalization_name == "dataset":
@@ -85,18 +94,21 @@ def build_transform(
     else:
         raise ValueError(f"unsupported normalization: {normalization_name!r}")
 
-    ops = [ResizePadToSquare(input_size)]
-    if is_train:
-        if augmentation == "G1":
-            scale = config.get("augmentation_scale", (0.98, 1.02))
+    ops = []
+    if bool(config.get("clahe", False)):
+        ops.append(CLAHE(config.get("clahe_clip_limit", 2.), config.get("clahe_grid_size", (8, 8))))
+    ops.append(ResizePadToSquare(input_size))
+    if is_train and augmentation != "G0":
+        if augmentation in {"G1", "G2", "G3"}:
+            scale = config.get("augmentation_scale", (0.95, 1.05) if augmentation == "G2" else (0.98, 1.02))
             if len(scale) != 2 or float(scale[0]) <= 0 or float(scale[1]) < float(scale[0]):
                 raise ValueError("augmentation_scale must be an increasing positive pair")
             ops.extend([
                 transforms.RandomAffine(
-                    degrees=float(config.get("augmentation_degrees", 3)),
+                    degrees=float(config.get("augmentation_degrees", 5 if augmentation == "G2" else 3)),
                     translate=(
-                        float(config.get("augmentation_translate", 0.02)),
-                        float(config.get("augmentation_translate", 0.02)),
+                        float(config.get("augmentation_translate", 0.04 if augmentation == "G2" else 0.02)),
+                        float(config.get("augmentation_translate", 0.04 if augmentation == "G2" else 0.02)),
                     ),
                     scale=(float(scale[0]), float(scale[1])),
                     fill=0,
@@ -108,22 +120,50 @@ def build_transform(
             ])
         elif augmentation == "AUTOAUG":
             ops.append(transforms.AutoAugment(policy=transforms.AutoAugmentPolicy.IMAGENET))
-        if bool(config.get("horizontal_flip", False)):
-            ops.append(transforms.RandomHorizontalFlip())
-    ops.extend([
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std),
-    ])
+        if bool(config.get("horizontal_flip", False)) or augmentation == "G3":
+            ops.append(transforms.RandomHorizontalFlip(p=float(config.get("horizontal_flip_prob", .5))))
+        if float(config.get("gamma_prob", 0.)) > 0:
+            ops.append(RandomGamma(config["gamma_prob"], config.get("gamma_range", (.8, 1.2))))
+    ops.append(transforms.ToTensor())
+    if is_train and augmentation != "G0" and float(config.get("random_erasing_prob", 0.)) > 0:
+        ops.append(transforms.RandomErasing(
+            p=float(config["random_erasing_prob"]),
+            scale=tuple(config.get("random_erasing_scale", (.005, .02))),
+            ratio=tuple(config.get("random_erasing_ratio", (.3, 3.3))), value=0.,
+        ))
+    ops.append(transforms.Normalize(mean, std))
     return transforms.Compose(ops)
+
+
+def filter_study_views(studies, view_filter=None):
+    """Retain selected images, excluding uncovered Studies with explicit coverage."""
+    selected = None if view_filter is None else {str(v).strip().upper() for v in view_filter}
+    if selected is not None and (not selected or selected - set(VIEW_TO_ID)):
+        raise ValueError("view_filter must contain known view names")
+    filtered = []
+    for study in studies:
+        indices = [i for i,v in enumerate(study.view_positions) if selected is None or normalize_view_position(v) in selected]
+        if indices:
+            filtered.append(replace(study, image_paths=tuple(study.image_paths[i] for i in indices),
+                                    view_positions=tuple(study.view_positions[i] for i in indices)))
+    retained_ids = {s.study_id for s in filtered}
+    coverage = {"total_studies": len(studies), "retained_studies": len(filtered),
+                "total_images": sum(len(s.image_paths) for s in studies),
+                "retained_images": sum(len(s.image_paths) for s in filtered),
+                "view_filter": sorted(selected) if selected is not None else None,
+                "dropped_study_ids": [s.study_id for s in studies if s.study_id not in retained_ids]}
+    return filtered, coverage
 
 
 class StudyDataset(Dataset):
     """Load every view in a Study together for attention-based aggregation."""
 
-    def __init__(self, manifest_path, image_root, transform=None, labeled=True, verify_paths=True):
+    def __init__(self, manifest_path, image_root, transform=None, labeled=True, verify_paths=True, view_filter=None):
         self.manifest_path = Path(manifest_path).resolve()
         self.image_root = Path(image_root).resolve()
-        self.studies = read_study_manifest(self.manifest_path, labeled=labeled)
+        self.studies, self.coverage = filter_study_views(read_study_manifest(self.manifest_path, labeled=labeled), view_filter)
+        if not self.studies:
+            raise ValueError("view_filter leaves no covered Studies")
         self.transform = transform
         self.labeled = labeled
         self.resolved_image_paths = [
@@ -175,28 +215,34 @@ class StudyDataset(Dataset):
         }
 
 
-def compute_dataset_normalization(manifest_path, image_root, input_size: int = 224):
+def compute_dataset_normalization(manifest_path, image_root, input_size: int = 224, config=None):
     """Compute RGB mean and standard deviation after resize and square padding.
 
     The statistics are accumulated per pixel without retaining images in
     memory.  They are therefore deterministic for a fixed manifest and image
     tree, and can be cached by the training entry point for resumed runs.
     """
+    config = config or {}
     dataset = StudyDataset(
         manifest_path,
         image_root,
         transform=None,
         labeled=True,
         verify_paths=True,
+        view_filter=config.get("view_filter"),
     )
     resize = ResizePadToSquare(input_size)
+    clahe = CLAHE(config.get("clahe_clip_limit", 2.), config.get("clahe_grid_size", (8, 8))) if config.get("clahe", False) else None
     channel_sum = np.zeros(3, dtype=np.float64)
     channel_square_sum = np.zeros(3, dtype=np.float64)
     pixel_count = 0
     for paths in dataset.resolved_image_paths:
         for path in paths:
             with Image.open(path) as source:
-                image = np.asarray(resize(source.convert("RGB")), dtype=np.float32) / 255.0
+                image = source.convert("RGB")
+                if clahe is not None:
+                    image = clahe(image)
+                image = np.asarray(resize(image), dtype=np.float32) / 255.0
             pixels = image.reshape(-1, 3)
             channel_sum += pixels.sum(axis=0, dtype=np.float64)
             channel_square_sum += np.square(pixels, dtype=np.float32).sum(axis=0, dtype=np.float64)
