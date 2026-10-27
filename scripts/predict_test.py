@@ -122,7 +122,8 @@ def main():
         set_inference_size(model,config,size,state)
         # Re-open original files for each scale. Never resize a previously normalized tensor.
         dataset = StudyDataset(manifest,args.data_root,build_transform(False,size,config,normalization),
-                               labeled=args.labeled,view_filter=config.get('view_filter'))
+                               labeled=args.labeled,view_filter=config.get('view_filter'),
+                               use_view_embedding=config.get('use_view_embedding',True))
         ids, probabilities, targets = predict_dataset(model,dataset,config,device,args.tta=='horizontal-flip')
         if final_ids is None:
             final_ids,final_targets,total,coverage = ids,targets,probabilities,dataset.coverage

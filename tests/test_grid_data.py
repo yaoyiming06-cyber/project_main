@@ -71,6 +71,28 @@ class GridDataTests(unittest.TestCase):
         self.assertEqual(coverage['retained_studies'],1)
         self.assertEqual(coverage['total_studies'],2)
 
+    def test_dataset_without_view_embedding_does_not_require_view_position(self):
+        import csv
+        import tempfile
+        from cxr_project.dataset import StudyDataset, collate_studies
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            Image.new('RGB',(8,8),'white').save(root/'one.png')
+            Image.new('RGB',(8,8),'black').save(root/'two.png')
+            manifest = root/'train.csv'
+            columns = ['image_path','Subject_id','Study_id']+[f'label_{i}' for i in range(10)]
+            with manifest.open('w',newline='') as stream:
+                writer = csv.DictWriter(stream,fieldnames=columns); writer.writeheader()
+                for index,name in enumerate(('one.png','two.png')):
+                    writer.writerow(dict(image_path=name,Subject_id='subject',Study_id='study',**{f'label_{i}':0 for i in range(10)}))
+            dataset = StudyDataset(manifest,root,transform=build_transform(False,8),
+                                   view_filter=None,use_view_embedding=False)
+            batch = collate_studies([dataset[0]])
+            self.assertEqual(batch['view_ids'].tolist(),[0,0])
+            self.assertEqual(batch['offsets'].tolist(),[0,2])
+            with self.assertRaisesRegex(ValueError,'ViewPosition'):
+                StudyDataset(manifest,root,view_filter=['AP'],use_view_embedding=False)
+
     def test_mixup_unknown_targets_not_fabricated(self):
         from cxr_project.losses import mixed_training_loss
         main = torch.zeros(2,10,requires_grad=True)

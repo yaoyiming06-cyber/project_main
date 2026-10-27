@@ -1,0 +1,31 @@
+{
+  "stage": "S0",
+  "baseline": "D:\\project\\project_main\\project_main\\configs\\h1_seed2027.yaml",
+  "baseline_sha256": "c8b9459f46a713856b2bd6340c9437e350189f330a3922c32168bd4f2e862317",
+  "jobs": [
+    {
+      "name": "S0_A0_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S0_seed42\\S0_A0_seed42.yaml",
+      "config_sha256": "53560b62e3c3644b984a3f9a0a63c52e96cf17fe8d6359cb0bc1f068c3411322",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S0_seed42\\S0_A0_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    }
+  ],
+  "evaluation_commands": {
+    "V1": "folds",
+    "V2": "bootstrap",
+    "V3": "predict_test.py --tta horizontal-flip",
+    "V4": "predict_test.py --tta-sizes",
+    "V5": "fuse",
+    "V6": "export-fp16 / compare",
+    "V7": "final-manifest"
+  },
+  "execution_requested": false
+}

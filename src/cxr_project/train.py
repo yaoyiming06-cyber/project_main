@@ -378,8 +378,16 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     normalization_stats = _normalization_stats(config, train_manifest, image_root, run_dir)
     train_transform = build_transform(True, int(config["input_size"]), config, normalization_stats)
     valid_transform = build_transform(False, int(config["input_size"]), config, normalization_stats)
-    train_data = StudyDataset(train_manifest, image_root, train_transform, view_filter=config.get("view_filter"))
-    valid_data = None if final else StudyDataset(valid_manifest, image_root, valid_transform, view_filter=config.get("view_filter"))
+    train_data = StudyDataset(
+        train_manifest, image_root, train_transform,
+        view_filter=config.get("view_filter"),
+        use_view_embedding=config.get("use_view_embedding", True),
+    )
+    valid_data = None if final else StudyDataset(
+        valid_manifest, image_root, valid_transform,
+        view_filter=config.get("view_filter"),
+        use_view_embedding=config.get("use_view_embedding", True),
+    )
     for prefix, dataset in (("train", train_data), ("valid", valid_data)):
         data_summary[prefix+"_studies"] = len(dataset) if dataset else 0
         data_summary[prefix+"_images"] = sum(len(s.image_paths) for s in dataset.studies) if dataset else 0
