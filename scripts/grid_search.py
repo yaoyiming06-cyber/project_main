@@ -19,7 +19,7 @@ def main():
     p.add_argument('--output-root',type=Path,required=True)
     p.add_argument('--project-root',type=Path,help='Root for relative baseline paths; defaults to baseline parent.parent')
     p.add_argument('--weights',action='append',default=[],metavar='B1=PATH')
-    p.add_argument('--device',choices=['cuda','cpu'],default='cuda')
+    p.add_argument('--device',choices=['auto','cuda','mps','cpu'],default='cuda')
     p.add_argument('--execute',action='store_true',help='Explicitly start generated training jobs sequentially')
     args=p.parse_args()
     baseline=load_config(args.baseline)

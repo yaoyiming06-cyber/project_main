@@ -35,6 +35,39 @@ RECIPES = {
     'AF0': {'model': 'vit_base_patch16_224.augreg_in21k', 'freeze_backbone': True, 'adaptformer': False, 'experts_enabled': False, 'hard_label_indices': [], 'expert_loss_weight': 0., 'train_label_indices': [0,3,7], 'normalization': 'pretrained', 'unfreeze_last_stages': None},
     'AF1': {'model': 'vit_base_patch16_224.augreg_in21k', 'freeze_backbone': True, 'adaptformer': True, 'experts_enabled': False, 'hard_label_indices': [], 'expert_loss_weight': 0., 'train_label_indices': [0,3,7], 'normalization': 'pretrained', 'unfreeze_last_stages': None},
 }
+# Reset the full comparison protocol rather than inheriting old stopping rules.
+_HEAD_PROTOCOL = {
+    'model': 'convnext_base.fb_in22k', 'pretrained': True, 'input_size': 256,
+    'epochs': 15, 'warmup_epochs': 5, 'lr': .0005, 'min_lr': .000001,
+    'optimizer': 'adamw', 'weight_decay': .1, 'layer_decay': .65,
+    'drop_path': .1, 'head_dropout': .2, 'expert_dropout': .2,
+    'freeze_backbone': False, 'unfreeze_last_stages': None, 'adaptformer': False,
+    'ema': True, 'ema_decay': .9998, 'ema_start_epoch': 1,
+    'validation_weights': 'ema', 'evaluate_raw_and_ema': False,
+    'early_stopping_patience': 0, 'early_stopping_min_delta': 0.,
+    'clip_grad': None, 'use_view_embedding': False, 'view_filter': None,
+    'loss': 'focal', 'focal_gamma': 2., 'pos_weight_mode': 'ratio',
+    'max_pos_weight': 20., 'manual_pos_weights': None,
+    'label_strategy': 'E0', 'blank_policy': 'zero', 'uncertain_policy': 'ignore',
+    'train_label_indices': None, 'final_training': False,
+    'augmentation': 'G1', 'augmentation_degrees': 3., 'augmentation_translate': .02,
+    'augmentation_scale': [.98, 1.02], 'color_jitter_brightness': .08,
+    'color_jitter_contrast': .08, 'horizontal_flip': False, 'horizontal_flip_prob': 0.,
+    'gamma_prob': 0., 'random_erasing_prob': 0., 'mixup_alpha': 0., 'clahe': False,
+    'normalization': 'imagenet1k', 'sampling_strategy': 'shuffle',
+    'sampling_warmup_epochs': 0, 'head_type': 'linear',
+    'query_dim': 256, 'query_layers': 1, 'query_heads': 4, 'query_dropout': .2,
+    'study_pooling': 'attention', 'experts_enabled': False,
+    'hard_label_indices': [], 'expert_loss_weight': 0., '_effective_batch': 16,
+}
+RECIPES.update({
+    'HEAD_C0': {**_HEAD_PROTOCOL, 'experts_enabled': True,
+                'hard_label_indices': [0, 3, 7], 'expert_loss_weight': .5},
+    'HEAD_C1': {**_HEAD_PROTOCOL},
+    'HEAD_H1': {**_HEAD_PROTOCOL, 'study_pooling': 'label_attention'},
+    'HEAD_H2': {**_HEAD_PROTOCOL, 'head_type': 'label_query'},
+    'HEAD_H3': {**_HEAD_PROTOCOL, 'head_type': 'label_query', 'study_pooling': 'label_attention'},
+})
 EVALUATION_RECIPES = {'V1': 'folds', 'V2': 'bootstrap', 'V3': 'predict_test.py --tta horizontal-flip', 'V4': 'predict_test.py --tta-sizes', 'V5': 'fuse', 'V6': 'export-fp16 / compare', 'V7': 'final-manifest'}
 
 def experiment_overrides(experiment):

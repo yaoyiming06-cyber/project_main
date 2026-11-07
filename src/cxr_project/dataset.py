@@ -140,12 +140,19 @@ def filter_study_views(studies, view_filter=None):
     selected = None if view_filter is None else {str(v).strip().upper() for v in view_filter}
     if selected is not None and (not selected or selected - set(VIEW_TO_ID)):
         raise ValueError("view_filter must contain known view names")
+    if selected is not None and any(len(study.view_positions) != len(study.image_paths) for study in studies):
+        raise ValueError("view filtering requires a ViewPosition for every image")
     filtered = []
     for study in studies:
-        indices = [i for i,v in enumerate(study.view_positions) if selected is None or normalize_view_position(v) in selected]
+        indices = (
+            list(range(len(study.image_paths)))
+            if selected is None
+            else [i for i, view in enumerate(study.view_positions) if normalize_view_position(view) in selected]
+        )
         if indices:
             filtered.append(replace(study, image_paths=tuple(study.image_paths[i] for i in indices),
-                                    view_positions=tuple(study.view_positions[i] for i in indices)))
+                                    view_positions=tuple(study.view_positions[i] for i in indices)
+                                    if study.view_positions else ()))
     retained_ids = {s.study_id for s in filtered}
     coverage = {"total_studies": len(studies), "retained_studies": len(filtered),
                 "total_images": sum(len(s.image_paths) for s in studies),
@@ -158,10 +165,17 @@ def filter_study_views(studies, view_filter=None):
 class StudyDataset(Dataset):
     """Load every view in a Study together for attention-based aggregation."""
 
-    def __init__(self, manifest_path, image_root, transform=None, labeled=True, verify_paths=True, view_filter=None):
+    def __init__(self, manifest_path, image_root, transform=None, labeled=True, verify_paths=True,
+                 view_filter=None, use_view_embedding=True):
         self.manifest_path = Path(manifest_path).resolve()
         self.image_root = Path(image_root).resolve()
-        self.studies, self.coverage = filter_study_views(read_study_manifest(self.manifest_path, labeled=labeled), view_filter)
+        include_view_positions = bool(use_view_embedding) or view_filter is not None
+        studies = read_study_manifest(
+            self.manifest_path,
+            labeled=labeled,
+            include_view_positions=include_view_positions,
+        )
+        self.studies, self.coverage = filter_study_views(studies, view_filter)
         if not self.studies:
             raise ValueError("view_filter leaves no covered Studies")
         self.transform = transform
@@ -203,9 +217,10 @@ class StudyDataset(Dataset):
             with Image.open(path) as source:
                 image = source.convert("RGB")
             images.append(self.transform(image) if self.transform else image)
-        view_ids = [
-            VIEW_TO_ID[normalize_view_position(view)] for view in study.view_positions
-        ]
+        view_ids = (
+            [VIEW_TO_ID[normalize_view_position(view)] for view in study.view_positions]
+            if study.view_positions else [0] * len(images)
+        )
         labels = None if study.labels is None else torch.tensor(study.labels, dtype=torch.float32)
         return {
             "images": images,
@@ -230,6 +245,7 @@ def compute_dataset_normalization(manifest_path, image_root, input_size: int = 2
         labeled=True,
         verify_paths=True,
         view_filter=config.get("view_filter"),
+        use_view_embedding=config.get("use_view_embedding", True),
     )
     resize = ResizePadToSquare(input_size)
     clahe = CLAHE(config.get("clahe_clip_limit", 2.), config.get("clahe_grid_size", (8, 8))) if config.get("clahe", False) else None

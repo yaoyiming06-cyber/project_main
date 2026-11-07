@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "seed": 42,
+  "classification_threshold": 0.5,
+  "fusion": "weighted_probability_mean",
+  "patient_smoothing_alpha": 0.0,
+  "tta": "none",
+  "models": [
+    {
+      "name": "replace_with_confirmed_model",
+      "config": "configs/generated/heads_seed42/pilot_HEAD_C1_seed42.yaml",
+      "checkpoint": "runs/heads/pilot/pilot_HEAD_C1_seed42/checkpoint-best-ema.pth",
+      "weights": "ema",
+      "fusion_weight": 1.0
+    }
+  ]
+}

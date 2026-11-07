@@ -31,7 +31,7 @@ def _parse_label(value, path: Path, row_number: int, column: str) -> int:
     return int(number)
 
 
-def read_study_manifest(path, labeled=True) -> list[StudyRecord]:
+def read_study_manifest(path, labeled=True, include_view_positions=True) -> list[StudyRecord]:
     """Read a one-row-per-image CSV and return one record per Study_id.
 
     Blank labels map to zero, matching the selected G1 configuration. Explicit
@@ -43,7 +43,9 @@ def read_study_manifest(path, labeled=True) -> list[StudyRecord]:
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         fields = set(reader.fieldnames or ())
-        required = {"image_path", "Subject_id", "Study_id", "ViewPosition"}
+        required = {"image_path", "Subject_id", "Study_id"}
+        if include_view_positions:
+            required.add("ViewPosition")
         if labeled:
             required.update(LABEL_COLUMNS)
         missing = required - fields
@@ -56,7 +58,7 @@ def read_study_manifest(path, labeled=True) -> list[StudyRecord]:
             image_path = (row.get("image_path") or "").strip().replace("\\", "/")
             subject_id = (row.get("Subject_id") or "").strip()
             study_id = (row.get("Study_id") or "").strip()
-            view_position = (row.get("ViewPosition") or "").strip()
+            view_position = (row.get("ViewPosition") or "").strip() if include_view_positions else None
             if not image_path or not subject_id or not study_id:
                 raise ValueError(f"{path}:{row_number} has an empty image path or ID")
             if image_path in seen_paths:
@@ -83,7 +85,8 @@ def read_study_manifest(path, labeled=True) -> list[StudyRecord]:
             elif study["labels"] != labels:
                 raise ValueError(f"Study_id {study_id!r} has inconsistent labels")
             study["image_paths"].append(image_path)
-            study["view_positions"].append(view_position)
+            if include_view_positions:
+                study["view_positions"].append(view_position)
 
     if not grouped:
         raise ValueError(f"manifest contains no image rows: {path}")

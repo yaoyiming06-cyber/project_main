@@ -10,6 +10,9 @@ from torch import nn
 from torch.utils.checkpoint import checkpoint
 
 from .labels import HARD_LABEL_INDICES, NUM_LABELS, VIEW_NAMES
+from .grid_options import HEAD_DEFAULTS, validate_head_options
+from .heads import LabelwiseClassifier, SpatialLabelQuery
+from .pooling import LabelAttentionPooling
 
 
 MODEL_NAME = "convnext_base.fb_in22k"
@@ -77,14 +80,25 @@ class ConvNeXtStudyClassifier(nn.Module):
         experts_enabled=True,
         study_pooling="attention",
         use_view_embedding=True,
+        head_type="linear",
+        query_dim=256,
+        query_layers=1,
+        query_heads=4,
+        query_dropout=.2,
     ):
         super().__init__()
         self.feature_dim = int(feature_dim)
         self.hard_label_indices = tuple(int(index) for index in hard_label_indices) if experts_enabled else ()
         self.study_pooling = str(study_pooling).lower()
         self.use_view_embedding = bool(use_view_embedding)
-        if self.study_pooling not in {"attention", "mean"}:
-            raise ValueError("study_pooling must be attention or mean")
+        self.head_type = str(head_type)
+        validate_head_options(dict(head_type=self.head_type, query_dim=query_dim,
+                                   query_layers=query_layers, query_heads=query_heads,
+                                   query_dropout=query_dropout, study_pooling=self.study_pooling,
+                                   use_view_embedding=self.use_view_embedding,
+                                   experts_enabled=experts_enabled))
+        if self.study_pooling not in {"attention", "mean", "label_attention"}:
+            raise ValueError("study_pooling must be attention, mean, or label_attention")
         if not 0 <= float(head_dropout) < 1 or not 0 <= float(expert_dropout) < 1:
             raise ValueError("head_dropout and expert_dropout must be in [0, 1)")
         if len(set(self.hard_label_indices)) != len(self.hard_label_indices):
@@ -131,6 +145,15 @@ class ConvNeXtStudyClassifier(nn.Module):
             raise ValueError("pretrained=True requires the built-in ConvNeXt-Base backbone")
         self.backbone = backbone
 
+        # None adds no state_dict entries on the historical path.
+        self.label_query = (SpatialLabelQuery(self.feature_dim, query_dim, query_heads,
+                                             query_layers, query_dropout, NUM_LABELS)
+                            if self.head_type == 'label_query' else None)
+        label_dim = query_dim if self.label_query is not None else self.feature_dim
+        self.label_pooling = (LabelAttentionPooling(label_dim, NUM_LABELS)
+                              if self.study_pooling == 'label_attention' else None)
+        self.label_features = self.label_query is not None or self.label_pooling is not None
+
         self.view_embedding = (nn.Embedding(len(VIEW_NAMES), 32)
                                if self.use_view_embedding and self.study_pooling == "attention" else None)
         attention_dim = self.feature_dim + (32 if self.view_embedding is not None else 0)
@@ -140,7 +163,7 @@ class ConvNeXtStudyClassifier(nn.Module):
             nn.Tanh(),
             nn.Linear(128, 1),
         ) if self.study_pooling == "attention" else None
-        self.main_head = nn.Sequential(
+        self.main_head = LabelwiseClassifier(label_dim, NUM_LABELS, float(head_dropout)) if self.label_features else nn.Sequential(
             nn.LayerNorm(self.feature_dim),
             nn.Dropout(float(head_dropout)),
             nn.Linear(self.feature_dim, NUM_LABELS),
@@ -157,6 +180,7 @@ class ConvNeXtStudyClassifier(nn.Module):
         ])
 
     def _features_from_chunk(self, image_chunk):
+        feature_map = None
         if hasattr(self.backbone, "forward_features"):
             feature_map = self.backbone.forward_features(image_chunk)
             if hasattr(self.backbone, "forward_head"):
@@ -171,6 +195,10 @@ class ConvNeXtStudyClassifier(nn.Module):
             raise ValueError(
                 "backbone must return [images, channels, height, width] or [images, features]"
             )
+        if self.label_query is not None:
+            if feature_map is None:
+                raise ValueError('spatial label_query requires backbone.forward_features')
+            return features, self.label_query(feature_map)
         return features
 
     def _encode_images(self, images):
@@ -183,9 +211,19 @@ class ConvNeXtStudyClassifier(nn.Module):
             else:
                 features = self._features_from_chunk(image_chunk)
             feature_chunks.append(features)
+        if self.label_query is not None:
+            return (torch.cat([part[0] for part in feature_chunks], dim=0),
+                    torch.cat([part[1] for part in feature_chunks], dim=0))
         return torch.cat(feature_chunks, dim=0)
 
     def encode_studies(self, image_features, offsets, view_ids):
+        label_features = None
+        if self.label_query is not None:
+            if not isinstance(image_features, tuple) or len(image_features) != 2:
+                raise ValueError('spatial query needs (global features, spatial label features); pooled vectors alone are invalid')
+            image_features, label_features = image_features
+            if label_features.shape != (image_features.shape[0], NUM_LABELS, self.label_query.queries.shape[1]):
+                raise ValueError('spatial query features must have shape [images, 10, query_dim]')
         if image_features.ndim != 2 or image_features.shape[1] != self.feature_dim:
             raise ValueError(f"image_features must have shape [images, {self.feature_dim}]")
         if view_ids.ndim != 1 or view_ids.shape[0] != image_features.shape[0]:
@@ -199,15 +237,20 @@ class ConvNeXtStudyClassifier(nn.Module):
         study_features = []
         for start, end in zip(boundaries, boundaries[1:]):
             study_image_features = image_features[start:end]
+            values = label_features[start:end] if label_features is not None else study_image_features
+            if self.label_pooling is not None:
+                study_features.append(self.label_pooling(values))
+                continue
             if self.study_pooling == "mean":
-                study_features.append(study_image_features.mean(dim=0))
+                study_features.append(values.mean(dim=0))
                 continue
             attention_input = study_image_features
             if self.view_embedding is not None:
                 study_view_features = self.view_embedding(view_ids[start:end])
                 attention_input = torch.cat((study_image_features, study_view_features), dim=1)
             weights = self.attention(attention_input).squeeze(1).softmax(dim=0)
-            study_features.append((weights[:, None] * study_image_features).sum(dim=0))
+            weight_shape = (-1,) + (1,) * (values.ndim - 1)
+            study_features.append((weights.reshape(weight_shape) * values).sum(dim=0))
         return torch.stack(study_features)
 
     def classify_features(self, pooled):
@@ -233,6 +276,7 @@ SUPPORTED_MODELS = {
 
 def model_options(config):
     return {key: config.get(key, default) for key, default in {
+        **HEAD_DEFAULTS,
         'drop_path': .1, 'hard_label_indices': HARD_LABEL_INDICES,
         'gradient_checkpointing': True, 'image_chunk_size': 2,
         'head_dropout': .2, 'expert_dropout': .2, 'experts_enabled': True,
@@ -284,6 +328,7 @@ def build_model(config, pretrained_checkpoint=None, pretrained=None):
     The existing Base checkpoint retains its built-in pinned hash. No implicit
     network downloads occur here. ViT adapters are installed after weight loading.
     """
+    validate_head_options(config)
     name = str(config.get('model', MODEL_NAME))
     if name not in SUPPORTED_MODELS:
         raise ValueError(f'Unsupported model {name!r}; choose one of {list(SUPPORTED_MODELS)}')

@@ -1,6 +1,11 @@
 """Strict optional grid configuration; defaults preserve historical behavior."""
 import math
+HEAD_DEFAULTS = {
+ "head_type": "linear", "query_dim": 256, "query_layers": 1,
+ "query_heads": 4, "query_dropout": .2,
+}
 DEFAULTS = {
+ **HEAD_DEFAULTS,
  "ema": False, "ema_decay": .9998, "ema_start_epoch": 1,
  "early_stopping_patience": 0, "early_stopping_min_delta": 0.,
  "freeze_backbone": False, "unfreeze_last_stages": None,
@@ -17,11 +22,36 @@ DEFAULTS = {
  "evaluate_raw_and_ema": False, "validation_weights": "auto",
  "final_training": False, "project_root": None, "train_label_indices": None,
 }
+def validate_head_options(c):
+ """Reject unsupported architecture combinations before reading data/weights."""
+ o = {**HEAD_DEFAULTS, **c}
+ if o['head_type'] not in {'linear', 'label_query'}:
+  raise ValueError('head_type must be linear or label_query')
+ for key in ('query_dim', 'query_layers', 'query_heads'):
+  if type(o[key]) is not int or o[key] < 1:
+   raise ValueError(f'{key} must be a positive integer')
+ if o['query_dim'] % o['query_heads']:
+  raise ValueError('query_dim must be divisible by query_heads')
+ if not math.isfinite(float(o['query_dropout'])) or not 0 <= float(o['query_dropout']) < 1:
+  raise ValueError('query_dropout must be in [0,1)')
+ label_features = o['head_type'] == 'label_query' or o.get('study_pooling') == 'label_attention'
+ if label_features:
+  if o.get('use_view_embedding', True) or o.get('view_filter') is not None:
+   raise ValueError('label heads require use_view_embedding=false and view_filter=null')
+  if o.get('experts_enabled', True):
+   raise ValueError('label heads require experts_enabled=false for the first experiment batch')
+  if float(o.get('mixup_alpha', 0.)) != 0:
+   raise ValueError('label heads do not yet support mixup_alpha > 0')
+ if o['head_type'] == 'label_query' and 'model' in o and o['model'] not in {
+     'convnext_base.fb_in22k', 'convnext_small.fb_in22k'}:
+  raise ValueError('spatial label_query currently supports ConvNeXt backbones only')
+
 OPTIONAL_KEYS = set(DEFAULTS) | {
  "horizontal_flip_prob", "augmentation_degrees", "augmentation_translate", "augmentation_scale",
  "color_jitter_brightness", "color_jitter_contrast", "normalization_mean", "normalization_std",
 }
 def validate_options(c):
+ validate_head_options(c)
  for key in ('ema','freeze_backbone','experts_enabled','use_view_embedding','adaptformer','clahe',
              'horizontal_flip','evaluate_raw_and_ema','final_training','amp','pretrained','pin_memory','gradient_checkpointing'):
   if type(c[key]) is not bool: raise ValueError(f'{key} must be a YAML boolean')
@@ -44,7 +74,7 @@ def validate_options(c):
  if float(c['random_erasing_scale'][1])>1: raise ValueError('random_erasing_scale must be <=1')
  grid=c['clahe_grid_size']
  if not isinstance(grid,(list,tuple)) or len(grid)!=2 or any(type(v) is not int or v<1 for v in grid): raise ValueError('clahe_grid_size must contain two positive integers')
- if c['study_pooling'] not in {'attention','mean'}: raise ValueError('study_pooling must be attention or mean')
+ if c['study_pooling'] not in {'attention','mean','label_attention'}: raise ValueError('study_pooling must be attention, mean, or label_attention')
  if c['sampling_strategy'] not in {'shuffle','weighted'}: raise ValueError('sampling_strategy must be shuffle or weighted')
  if c['sampling_strategy']=='weighted' and c['pos_weight_mode']!='unit': raise ValueError('weighted sampling requires pos_weight_mode unit')
  if c['validation_weights'] not in {'auto','raw','ema'}: raise ValueError('validation_weights must be auto, raw, or ema')

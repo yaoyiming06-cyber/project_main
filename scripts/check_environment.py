@@ -1,13 +1,20 @@
-"""Report whether the active Python environment can run Windows CUDA training."""
+"""Report whether the active environment can run CUDA, MPS, or CPU training."""
 
 import argparse
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="cuda",
+                        help="Device to validate; defaults to CUDA for the Windows setup script")
     parser.add_argument("--allow-no-cuda", action="store_true",
                         help="Validate installed packages without requiring a CUDA GPU")
+    parser.add_argument("--allow-no-accelerator", action="store_true",
+                        help="Allow a CPU-only environment when device=auto")
     args = parser.parse_args()
     problems = []
     if not ((3, 11) <= sys.version_info[:2] < (3, 13)):
@@ -20,6 +27,7 @@ def main():
         import sklearn
         import yaml
         from PIL import Image
+        from cxr_project.runtime import mps_available, select_device
     except ImportError as error:
         print(f"Missing dependency: {error}")
         return 2
@@ -47,8 +55,29 @@ def main():
         _ = probe @ probe.T
         torch.cuda.synchronize()
         print("CUDA allocation and matrix multiply: OK")
-    elif not args.allow_no_cuda:
-        problems.append("PyTorch cannot access a CUDA GPU; install a CUDA-enabled wheel and check the NVIDIA driver")
+    mps_backend = getattr(torch.backends, "mps", None)
+    print(f"MPS built:     {getattr(mps_backend, 'is_built', lambda: False)()}")
+    print(f"MPS visible:   {mps_available()}")
+    try:
+        selected = select_device(args.device)
+    except RuntimeError as error:
+        if args.device == "cuda" and args.allow_no_cuda:
+            selected = torch.device("cpu")
+        else:
+            problems.append(str(error))
+            selected = None
+    if selected is not None:
+        print(f"Selected device: {selected}")
+        if selected.type == "mps":
+            try:
+                probe = torch.randn(64, 64, device="mps")
+                _ = probe @ probe.T
+                torch.mps.synchronize()
+                print("MPS allocation and matrix multiply: OK")
+            except Exception as error:
+                problems.append(f"MPS allocation failed: {error}")
+        elif selected.type == "cpu" and args.device == "auto" and not (args.allow_no_accelerator or args.allow_no_cuda):
+            problems.append("No requested accelerator is available; use --allow-no-accelerator for CPU-only checks")
 
     if problems:
         for problem in problems:

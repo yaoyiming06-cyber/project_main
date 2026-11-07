@@ -1,4 +1,4 @@
-"""Full Windows/CUDA training entry point for the G1 seed42 experiment."""
+"""Cross-platform ConvNeXt training entry point for Windows CUDA and Mac MPS."""
 
 from __future__ import annotations
 
@@ -29,7 +29,14 @@ from .dataset import (
 from .labels import LABEL_NAMES
 from .losses import combine_main_and_expert_logits, compute_training_loss, mixed_training_loss
 from .sampling import build_train_sampler
-from .runtime import optimizer_update
+from .runtime import (
+    autocast_context,
+    create_grad_scaler,
+    device_supports_amp,
+    mps_available,
+    optimizer_update,
+    select_device,
+)
 from .manifest import resolve_pos_weights
 from .metrics import compute_macro_auc
 from .model import build_model, SUPPORTED_MODELS
@@ -91,6 +98,8 @@ def set_seed(seed: int):
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    if mps_available() and hasattr(torch.mps, "manual_seed"):
+        torch.mps.manual_seed(seed)
 
 
 def _file_sha256(path: Path):
@@ -155,9 +164,7 @@ def _set_group_lrs(optimizer, base_lr):
 
 
 def _autocast(device, enabled):
-    if enabled and device.type == "cuda":
-        return torch.autocast(device_type="cuda", dtype=torch.float16)
-    return nullcontext()
+    return autocast_context(device, enabled)
 
 
 def evaluate(model, loader, device, use_amp, label_indices=None):
@@ -167,9 +174,9 @@ def evaluate(model, loader, device, use_amp, label_indices=None):
     all_study_ids = []
     with torch.inference_mode():
         for batch in loader:
-            images = batch["images"].to(device, non_blocking=True)
+            images = batch["images"].to(device, non_blocking=device.type == "cuda")
             offsets = batch["offsets"]
-            view_ids = batch["view_ids"].to(device, non_blocking=True)
+            view_ids = batch["view_ids"].to(device, non_blocking=device.type == "cuda")
             with _autocast(device, use_amp):
                 main_logits, expert_logits = model(images, offsets, view_ids)
             combined = combine_main_and_expert_logits(
@@ -271,10 +278,10 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
             )
             _set_group_lrs(optimizer, base_lr)
 
-        images = batch["images"].to(device, non_blocking=True)
+        images = batch["images"].to(device, non_blocking=device.type == "cuda")
         offsets = batch["offsets"]
-        view_ids = batch["view_ids"].to(device, non_blocking=True)
-        targets = batch["targets"].to(device, non_blocking=True)
+        view_ids = batch["view_ids"].to(device, non_blocking=device.type == "cuda")
+        targets = batch["targets"].to(device, non_blocking=device.type == "cuda")
         indices = config.get("train_label_indices")
         if indices is not None:
             targets = targets.clone()
@@ -322,6 +329,7 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
 def _rng_state(generator, sampler):
     return {"python": random.getstate(), "numpy": np.random.get_state(), "torch": torch.get_rng_state(),
             "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+            "mps": torch.mps.get_rng_state() if mps_available() and hasattr(torch.mps, "get_rng_state") else None,
             "loader": generator.get_state(),
             "sampler": sampler.generator.get_state() if sampler is not None else None}
 
@@ -333,6 +341,8 @@ def _restore_rng(state, generator, sampler):
     torch.set_rng_state(state["torch"].cpu())
     if state.get("cuda") is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all([v.cpu() for v in state["cuda"]])
+    if state.get("mps") is not None and mps_available() and hasattr(torch.mps, "set_rng_state"):
+        torch.mps.set_rng_state(state["mps"].cpu())
     generator.set_state(state["loader"].cpu())
     if sampler is not None and state.get("sampler") is not None:
         sampler.generator.set_state(state["sampler"].cpu())
@@ -340,6 +350,9 @@ def _restore_rng(state, generator, sampler):
 
 def _validate_resume(checkpoint, config, data_summary):
     previous = checkpoint.get("config", {})
+    from .grid_options import HEAD_DEFAULTS
+    previous = {**HEAD_DEFAULTS, **previous}
+    config = {**HEAD_DEFAULTS, **config}
     ignored = {"output_dir", "run_name", "project_root", "num_workers", "pin_memory",
                "image_root", "pretrained_checkpoint", "train_manifest", "valid_manifest", "test_manifest"}
     changed = [key for key, value in previous.items() if key not in ignored and config.get(key) != value]
@@ -354,11 +367,7 @@ def _validate_resume(checkpoint, config, data_summary):
 
 def train(config_path, data_root=None, output_dir=None, resume=None, device_name="cuda"):
     config = load_config(config_path)
-    if device_name not in ("cuda", "cpu"):
-        raise ValueError("device must be cuda or cpu")
-    if device_name == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA was requested but is unavailable")
-    device = torch.device(device_name)
+    device = select_device(device_name)
     set_seed(int(config["seed"]))
     final = bool(config.get("final_training", False))
     train_manifest = resolve_path(config, "train_manifest")
@@ -378,8 +387,16 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     normalization_stats = _normalization_stats(config, train_manifest, image_root, run_dir)
     train_transform = build_transform(True, int(config["input_size"]), config, normalization_stats)
     valid_transform = build_transform(False, int(config["input_size"]), config, normalization_stats)
-    train_data = StudyDataset(train_manifest, image_root, train_transform, view_filter=config.get("view_filter"))
-    valid_data = None if final else StudyDataset(valid_manifest, image_root, valid_transform, view_filter=config.get("view_filter"))
+    train_data = StudyDataset(
+        train_manifest, image_root, train_transform,
+        view_filter=config.get("view_filter"),
+        use_view_embedding=config.get("use_view_embedding", True),
+    )
+    valid_data = None if final else StudyDataset(
+        valid_manifest, image_root, valid_transform,
+        view_filter=config.get("view_filter"),
+        use_view_embedding=config.get("use_view_embedding", True),
+    )
     for prefix, dataset in (("train", train_data), ("valid", valid_data)):
         data_summary[prefix+"_studies"] = len(dataset) if dataset else 0
         data_summary[prefix+"_images"] = sum(len(s.image_paths) for s in dataset.studies) if dataset else 0
@@ -402,7 +419,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     weight_path = resolve_path(config, "pretrained_checkpoint") if config.get("pretrained_checkpoint") else None
     model = build_model(config, pretrained_checkpoint=weight_path, pretrained=bool(config["pretrained"]) and not resume).to(device)
     optimizer = build_optimizer(model, config["lr"], config["weight_decay"], config["layer_decay"])
-    scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and config["amp"])
+    scaler = create_grad_scaler(device, config["amp"])
     ema = ModelEMA(model, config["ema_decay"]) if config["ema"] else None
     ema_active = False
     start_epoch = global_step = bad_epochs = 0
@@ -435,7 +452,9 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
                     "normalization":normalization_stats or {"name":config["normalization"],"mean":list(norm.mean),"std":list(norm.std)},
                     "pretrained_weights":{"type":SUPPORTED_MODELS.get(config["model"]),"model":config["model"],"path":str(weight_path),
                                           "sha256":_file_sha256(weight_path) if weight_path and weight_path.is_file() else None},
-                    "device":str(device),"git":git_state,"git_revision":git_state["revision"],"started_at_unix":time.time()}
+                    "device":str(device),"amp_requested":bool(config["amp"]),
+                    "amp_effective":device_supports_amp(device, config["amp"]),
+                    "git":git_state,"git_revision":git_state["revision"],"started_at_unix":time.time()}
     fields = ["epoch","train_loss","macro_auc", *[f"auc_label_{i}" for i in range(10)]]
     def append_metrics(path,epoch,loss,metrics):
         exists=path.exists()
@@ -503,13 +522,13 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
     return run_dir
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Train the G1 seed42 ConvNeXt-Base model.")
+    parser = argparse.ArgumentParser(description="Train the ConvNeXt-Base model on CUDA, MPS, or CPU.")
     parser.add_argument("--config", type=Path, default=Path("configs/g1_seed42.yaml"))
     parser.add_argument("--data-root", type=Path, default=None,
                         help="Override the image root containing train/, valid/, and test/ folders")
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--resume", type=Path, default=None)
-    parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
+    parser.add_argument("--device", choices=("auto", "cuda", "mps", "cpu"), default="cuda")
     args = parser.parse_args(argv)
     run_dir = train(args.config, args.data_root, args.output_dir, args.resume, args.device)
     print(f"Training outputs: {run_dir}")

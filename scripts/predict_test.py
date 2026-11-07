@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-from contextlib import nullcontext
 from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
@@ -12,9 +11,11 @@ from cxr_project.dataset import StudyDataset, build_transform, collate_studies
 from cxr_project.labels import LABEL_COLUMNS
 from cxr_project.losses import combine_main_and_expert_logits
 from cxr_project.model import build_model, file_sha256
-from cxr_project.runtime import select_inference_state
+from cxr_project.runtime import autocast_context, select_device, select_inference_state
+from cxr_project.grid_options import HEAD_DEFAULTS
 
 INFERENCE_DEFAULTS = {
+    **HEAD_DEFAULTS,
     'experts_enabled': True, 'study_pooling': 'attention', 'use_view_embedding': True,
     'hard_label_indices': [0,3,7], 'head_dropout': .2, 'expert_dropout': .2,
     'adaptformer': False, 'adapter_dim': 64, 'adapter_dropout': .1, 'adapter_scale': 1.,
@@ -49,12 +50,11 @@ def inference_weights(checkpoint, selection='auto'):
     return {key: value.float() if value.is_floating_point() else value for key,value in state.items()}, source
 
 def predict_batch(model, batch, device, use_amp=False, horizontal_flip=False):
-    images = batch['images'].to(device, non_blocking=True)
-    view_ids = batch['view_ids'].to(device, non_blocking=True)
+    images = batch['images'].to(device, non_blocking=device.type == 'cuda')
+    view_ids = batch['view_ids'].to(device, non_blocking=device.type == 'cuda')
     probabilities = []
     for flipped in ([False,True] if horizontal_flip else [False]):
-        context = torch.autocast('cuda', dtype=torch.float16) if use_amp and device.type == 'cuda' else nullcontext()
-        with context:
+        with autocast_context(device, use_amp):
             main, experts = model(images.flip(-1) if flipped else images, batch['offsets'], view_ids)
         probabilities.append(combine_main_and_expert_logits(main.float(), experts.float(), model.hard_label_indices).sigmoid())
     return torch.stack(probabilities).mean(0).cpu()
@@ -89,7 +89,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ('config','checkpoint','data-root','output'):
         parser.add_argument('--'+name, type=Path, required=True)
-    parser.add_argument('--device', choices=('cuda','cpu'), default='cuda')
+    parser.add_argument('--device', choices=('auto','cuda','mps','cpu'), default='cuda')
     parser.add_argument('--weights', choices=('auto','raw','ema'), default='auto')
     parser.add_argument('--manifest', type=Path, help='Override test manifest, e.g. validation manifest')
     parser.add_argument('--labeled', action='store_true', help='Export target_i and probability_i columns')
@@ -100,13 +100,12 @@ def main():
     checkpoint_path, output = args.checkpoint.resolve(), args.output.resolve()
     sidecar = output.with_suffix('.json')
     if output.exists() or sidecar.exists(): raise FileExistsError(f'output or metadata already exists: {output}')
-    if args.device=='cuda' and not torch.cuda.is_available(): raise RuntimeError('CUDA requested but unavailable')
     checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
     validate_checkpoint_config(config,checkpoint)
     state, weight_source = inference_weights(checkpoint,args.weights)
     model = build_model(config,pretrained=False).float()
     model.load_state_dict(state,strict=True)
-    device = torch.device(args.device)
+    device = select_device(args.device)
     model.to(device).eval()
     normalization = checkpoint.get('normalization_stats') or checkpoint.get('normalization')
     if str(config['normalization']).lower()=='dataset' and not isinstance(normalization,dict):
@@ -122,7 +121,8 @@ def main():
         set_inference_size(model,config,size,state)
         # Re-open original files for each scale. Never resize a previously normalized tensor.
         dataset = StudyDataset(manifest,args.data_root,build_transform(False,size,config,normalization),
-                               labeled=args.labeled,view_filter=config.get('view_filter'))
+                               labeled=args.labeled,view_filter=config.get('view_filter'),
+                               use_view_embedding=config.get('use_view_embedding',True))
         ids, probabilities, targets = predict_dataset(model,dataset,config,device,args.tta=='horizontal-flip')
         if final_ids is None:
             final_ids,final_targets,total,coverage = ids,targets,probabilities,dataset.coverage

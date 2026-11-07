@@ -95,6 +95,20 @@ class ProjectSetupTests(unittest.TestCase):
             "weights/convnext_base.fb_in22k.safetensors",
         )
         self.assertIn("timm", (PROJECT_ROOT / "requirements-windows.txt").read_text())
+        mac_requirements = (PROJECT_ROOT / "requirements-mac.txt").read_text()
+        self.assertIn("torch==2.8.0", mac_requirements)
+        self.assertIn("torchvision==0.23.0", mac_requirements)
+
+    def test_mac_profile_keeps_schedule_but_uses_mps_safe_memory_settings(self):
+        config = load_config(PROJECT_ROOT / "configs" / "g1_seed42_mac.yaml")
+        self.assertEqual(config["model"], "convnext_base.fb_in22k")
+        self.assertEqual(config["epochs"], 10)
+        self.assertEqual(config["lr"], 1e-3)
+        self.assertEqual(config["batch_size_studies"], 1)
+        self.assertEqual(config["accum_steps"], 16)
+        self.assertEqual(config["num_workers"], 0)
+        self.assertFalse(config["amp"])
+        self.assertFalse(config["pin_memory"])
 
     def test_bundled_training_manifest_excludes_both_corrupt_images(self):
         manifest = PROJECT_ROOT / "data" / "manifests" / "train_manifest.csv"

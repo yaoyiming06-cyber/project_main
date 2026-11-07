@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cxr-project-main"
 version = "0.1.0"
-description = "Windows CUDA chest X-ray competition training project"
+description = "Cross-platform chest X-ray competition training project (Windows CUDA and Apple Silicon MPS)"
 requires-python = ">=3.11,<3.13"
 dependencies = [
   "numpy>=1.26,<3",

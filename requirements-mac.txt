@@ -1,0 +1,10 @@
+# Apple Silicon environment. MPS training runs in FP32; no CUDA extensions.
+torch==2.8.0
+torchvision==0.23.0
+numpy>=1.26,<3
+Pillow>=10.2
+PyYAML>=6.0
+scikit-learn>=1.4
+timm==1.0.30
+safetensors==0.8.0
+opencv-python-headless>=4.10,<6

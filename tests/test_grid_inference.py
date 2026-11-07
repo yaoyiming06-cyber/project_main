@@ -26,6 +26,14 @@ class InferenceTests(unittest.TestCase):
         result=predict.predict_batch(ToyModel(),batch,torch.device('cpu'),False,True)
         torch.testing.assert_close(result,torch.full((1,10),(.5+torch.sigmoid(torch.tensor(2.)).item())/2))
 
+    @unittest.skipUnless(torch.backends.mps.is_available(), "MPS is unavailable")
+    def test_prediction_batch_runs_on_mps_in_fp32(self):
+        images=torch.tensor([[[[0.,2.],[0.,2.]]]])
+        batch={'images':images,'offsets':[0,1],'view_ids':torch.tensor([0])}
+        result=predict.predict_batch(ToyModel().to('mps'),batch,torch.device('mps'),True,False)
+        self.assertEqual(result.device.type,'cpu')
+        torch.testing.assert_close(result,torch.full((1,10),0.5))
+
     def test_config_rejects_wrong_resolution_and_architecture(self):
         with self.assertRaisesRegex(ValueError,'input_size'):
             predict.validate_checkpoint_config({'model':'x','input_size':224},{'config':{'model':'x','input_size':256}})

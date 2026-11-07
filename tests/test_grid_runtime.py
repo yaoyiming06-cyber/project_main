@@ -1,5 +1,6 @@
 import unittest, tempfile, sys
 from pathlib import Path
+from unittest.mock import patch
 import yaml
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'src'))
 from cxr_project.config import load_config
@@ -45,4 +46,27 @@ class GridRuntimeTests(unittest.TestCase):
    updates=0
    def update(self,m):self.updates+=1
   ema=EMA();self.assertFalse(optimizer_update(model,opt,SkipScaler(),None,ema));self.assertEqual(ema.updates,0)
+
+ def test_auto_device_selects_mps_when_cuda_is_unavailable(self):
+  from cxr_project.runtime import select_device
+  with patch('torch.cuda.is_available',return_value=False), patch('torch.backends.mps.is_available',return_value=True):
+   self.assertEqual(select_device('auto').type,'mps')
+
+ def test_explicit_mps_requires_mps_support(self):
+  from cxr_project.runtime import select_device
+  with patch('torch.backends.mps.is_available',return_value=False):
+   with self.assertRaisesRegex(RuntimeError,'MPS'):
+    select_device('mps')
+
+ def test_amp_is_cuda_only_for_mps_safe_training(self):
+  import torch
+  from cxr_project.runtime import create_grad_scaler, device_supports_amp
+  self.assertFalse(device_supports_amp(torch.device('mps'),True))
+  self.assertFalse(device_supports_amp(torch.device('cpu'),True))
+  self.assertFalse(create_grad_scaler(torch.device('mps'),True).is_enabled())
+
+ def test_auto_device_prefers_cuda_when_both_accelerators_are_reported(self):
+  from cxr_project.runtime import select_device
+  with patch('torch.cuda.is_available',return_value=True), patch('torch.backends.mps.is_available',return_value=True):
+   self.assertEqual(select_device('auto').type,'cuda')
 

@@ -1,5 +1,49 @@
-"""Shared optimizer and inference state contracts."""
+"""Shared device, precision, optimizer, and inference state contracts."""
+import contextlib
 import torch
+
+
+def mps_available():
+    return hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+
+
+def select_device(requested="auto"):
+    """Resolve auto to CUDA, then Apple MPS, then CPU."""
+    requested = str(requested).lower()
+    if requested == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        if mps_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    if requested == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA was requested but is unavailable")
+        return torch.device("cuda")
+    if requested == "mps":
+        if not mps_available():
+            raise RuntimeError("MPS was requested but is unavailable; use Apple Silicon and an MPS-enabled PyTorch build")
+        return torch.device("mps")
+    if requested == "cpu":
+        return torch.device("cpu")
+    raise ValueError("device must be auto, cuda, mps, or cpu")
+
+
+def device_supports_amp(device, enabled=True):
+    """Keep mixed precision on CUDA only; run MPS and CPU in FP32."""
+    return bool(enabled) and torch.device(device).type == "cuda"
+
+
+def autocast_context(device, enabled=True):
+    if device_supports_amp(device, enabled):
+        return torch.autocast(device_type="cuda", dtype=torch.float16)
+    return contextlib.nullcontext()
+
+
+def create_grad_scaler(device, enabled=True):
+    """Create an active scaler only for CUDA AMP."""
+    use_scaler = device_supports_amp(device, enabled)
+    return torch.amp.GradScaler("cuda", enabled=use_scaler)
 
 
 def optimizer_update(model, optimizer, scaler, clip_grad=None, ema=None):

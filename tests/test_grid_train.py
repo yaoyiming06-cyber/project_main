@@ -67,4 +67,16 @@ class TrainGridTest(unittest.TestCase):
             for key,value in a['model'].items():torch.testing.assert_close(value,b['model'][key],rtol=0,atol=0)
             self.assertEqual(a['global_step'],b['global_step'])
 
+    @unittest.skipUnless(torch.backends.mps.is_available(), "MPS is unavailable")
+    def test_mps_training_smoke_records_fp32_device(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root=Path(temp);cfg=self.fixture(root)
+            with patch('cxr_project.train.build_model',side_effect=tiny):
+                train(cfg,device_name='mps')
+            manifest=json.loads((root/'run'/'run_manifest.json').read_text())
+            self.assertEqual(manifest['device'],'mps')
+            self.assertFalse(manifest['amp_effective'])
+            checkpoint=torch.load(root/'run'/'checkpoint-last.pth',map_location='cpu',weights_only=False)
+            self.assertIsNotNone(checkpoint['rng_state']['mps'])
+
 if __name__=='__main__':unittest.main()

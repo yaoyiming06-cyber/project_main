@@ -1,4 +1,4 @@
-> 状态说明（2026-10-24）：本文保留2026-10-21的历史实验说明。新的可执行配方、接口状态和Windows运行命令以 [docs/grid_interfaces.md](grid_interfaces.md) 与 [当前实验总表](experiments/imagenet_grid_draft/ImageNet训练网格汇总.csv) 为准。
+> 状态说明（2026-10-28）：本文保留2026-10-21的历史实验说明。最新结果和计划以 [当前实验总表](experiments/imagenet_grid_draft/ImageNet训练网格汇总.csv) 为准，运行接口见 [docs/grid_interfaces.md](grid_interfaces.md)。后续视角专家计划已取消；历史 S0/S1 使用过视角信息，不作为纯图像比赛基线成绩。新实验显式设置 `use_view_embedding: false`、`view_filter: null`，不得按测试 ViewPosition 筛图或选模型。
 
 # 训练网格基础文档
 
@@ -39,10 +39,6 @@
 | AdaptFormer · 肺实变 | 1e-3 | 10 / 5 | 单标签 BCE | 0.81467* | 必须重训 / 筛选后补 / 筛选后补 |
 | AdaptFormer · 肺炎 | 1e-3 | 10 / 5 | 单标签 BCE | 0.75305* | 必须重训 / 筛选后补 / 筛选后补 |
 | AdaptFormer · 肺部阴影 | 1e-3 | 10 / 5 | 单标签 BCE | 0.73598* | 必须重训 / 筛选后补 / 筛选后补 |
-| AP 十标签视角专家（A） | 1e-3 | 10 / 5 | 分视角 ratio | — | 待正式训 / 筛选后补 / 筛选后补 |
-| PA 十标签视角专家（B） | 1e-3 | 10 / 5 | 分视角 ratio | — | 待正式训 / 筛选后补 / 筛选后补 |
-| LATERAL 十标签视角专家（C） | 1e-3 | 10 / 5 | 分视角 ratio | — | 待正式训 / 筛选后补 / 筛选后补 |
-| LL 十标签视角专家（A） | 1e-3 | 10 / 5 | 分视角 ratio | — | 待正式训 / 筛选后补 / 筛选后补 |
 | Frontal-first | 1e-3 | 10 / 5 | 自动 ratio | 0.79517 | 暂缓 / 暂缓 / 暂缓 |
 | BLR=5e-4（旧日志） | 待核实 | 10 / 5 | 自动 ratio | — | 暂缓 / 暂缓 / 暂缓 |
 | Head probe（仅线性头） | 1e-3 | 5 / 1 | 待核实 | — | 暂缓 / 暂缓 / 暂缓 |
