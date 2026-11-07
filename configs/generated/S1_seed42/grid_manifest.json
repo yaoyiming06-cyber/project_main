@@ -1,0 +1,101 @@
+{
+  "stage": "S1",
+  "baseline": "D:\\project\\project_main\\project_main\\configs\\generated\\S0_seed42\\S0_A0_seed42.yaml",
+  "baseline_sha256": "53560b62e3c3644b984a3f9a0a63c52e96cf17fe8d6359cb0bc1f068c3411322",
+  "jobs": [
+    {
+      "name": "S1_C1_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C1_seed42.yaml",
+      "config_sha256": "32d4d029336e8df4f0f6b1a8997fe51c82a54fb7720213252b364855cfad9b13",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C1_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    },
+    {
+      "name": "S1_C2_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C2_seed42.yaml",
+      "config_sha256": "f16b5e4e825ca5a452befe6ce192c4e8e0433b1f4f5d8a9573d90af1ef750a9a",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C2_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    },
+    {
+      "name": "S1_C3_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C3_seed42.yaml",
+      "config_sha256": "6fabe34f82755d17d3c8c243b805043223773a130d4a90ad7271d52dc99cd936",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C3_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    },
+    {
+      "name": "S1_C4_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C4_seed42.yaml",
+      "config_sha256": "60879631971dd762fe438d4e04a6bfe3072ba4b5898057c8ae48de68d748abe8",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C4_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    },
+    {
+      "name": "S1_C5_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C5_seed42.yaml",
+      "config_sha256": "4d65eaf61ed4c813f0f3c8c86fae1aa0a7e5d8ac36696bbefdba6405366e8a7d",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C5_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    },
+    {
+      "name": "S1_C6_seed42",
+      "config": "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C6_seed42.yaml",
+      "config_sha256": "f61c4bc7f732ea6f382b99498b11339ef2ddbf566e76b1905d5f2ed8bfd16ddc",
+      "command": [
+        "D:\\project\\project_main\\project_main\\.venv\\Scripts\\python.exe",
+        "-m",
+        "cxr_project.train",
+        "--config",
+        "D:\\project\\project_main\\project_main\\configs\\generated\\S1_seed42\\S1_C6_seed42.yaml",
+        "--device",
+        "cuda"
+      ]
+    }
+  ],
+  "evaluation_commands": {
+    "V1": "folds",
+    "V2": "bootstrap",
+    "V3": "predict_test.py --tta horizontal-flip",
+    "V4": "predict_test.py --tta-sizes",
+    "V5": "fuse",
+    "V6": "export-fp16 / compare",
+    "V7": "final-manifest"
+  },
+  "execution_requested": false
+}
