@@ -4,6 +4,7 @@ __pycache__/
 .DS_Store
 *.py[cod]
 weights/*.pth
+weights/*.pth.source.json
 weights/*.safetensors
 weights/*.tmp
 runs/

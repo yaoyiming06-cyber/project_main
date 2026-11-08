@@ -15,7 +15,7 @@
 | 3 | `HEAD_H2` vs `HEAD_C1`，seed42 | 保留空间特征、由标签query提取区域表示是否有效？ | 代码/配置已验收，未启动正式训练 |
 | 4 | 候选及对应对照补seed2027/3407 | 收益能否跨种子复现，哪些标签受益或退步？ | 等首轮结果后确定候选 |
 | 5 | `HEAD_H3` | 逐标签图像聚合与空间query组合是否互补？ | 接口已验收，按H1/H2结果决定是否训练 |
-| 6 | 原版通用DINOv2；仅官方train自监督续训 | 不同通用表征或官方训练图像自监督是否有收益？ | 后续研究；本批尚未实现加载/训练入口 |
+| 6 | 原版通用DINOv2 ViT-B/14学习率与分辨率网格 | 通用自监督权重能否提升比赛验证集表现？ | 代码与分阶段配置入口已实现；15次Windows/CUDA正式训练待跑 |
 
 首轮C0/C1/H1/H2都是独立实验，可以分配给不同训练机并行运行；它们各自从相同ImageNet权重重新初始化，不继承上一实验的比赛checkpoint。首轮共4次训练；若只保留一个结构候选，再补该候选与C1的两种子共4次，合计8次。保留多个候选或新增H3时另计。
 
@@ -23,7 +23,7 @@
 
 所有HEAD实验使用去除两张破损图的A_exclude2清单、256分辨率、15轮/warmup5、LR5e-4、WD.10、layer_decay.65、G1、Focal gamma2、自动ratio posweight/cap20、EMA.9998、有效Study batch16；关闭视角输入/过滤、早停、梯度裁切。新结构不接收测试ViewPosition或临床字段。推荐配置是`configs/head_baseline_l5.yaml`（Windows）和`configs/head_baseline_l5_mac.yaml`（Mac）；下方保留的旧G1/S0–S7说明属于历史参考。完整HEAD连续命令及权重链接在文末。
 
-当前交付包括结构代码、跨平台配置、恢复/推理兼容、108项通过的自动测试；还没有新结构的真实训练AUC。DINOv2不是当前可执行实验。正式提交前另行核对所有模型权重与必要文件的500MB总量和官方推理耗时。
+当前交付包括结构代码、跨平台配置、恢复/推理兼容、DINOv2模型及网格入口；还没有新结构的真实训练AUC。正式提交前另行核对所有模型权重与必要文件的500MB总量和官方推理耗时。
 
 ## 工程结构
 
@@ -357,6 +357,39 @@ PY
 
 **权重下载：** 本批只需要已有的 [ConvNeXt-Base ImageNet-22K 模型卡](https://huggingface.co/timm/convnext_base.fb_in22k)中的权重；[固定版本 safetensors 直链](https://huggingface.co/timm/convnext_base.fb_in22k/resolve/9afd4146adabf1b6e861d0f1ac2e7baa7c8dd1b7/model.safetensors)。下载后保存为 `weights/convnext_base.fb_in22k.safetensors`；现有下载脚本会校验大小和上文 SHA-256。已有文件可直接复用。
 
-后续通用自监督骨干候选：[原版 DINOv2 ViT-B/14 权重](https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_pretrain.pth)，[官方代码与 Apache-2.0 说明](https://github.com/facebookresearch/dinov2)。这是通用 LVD-142M 预训练，不能称为仅 ImageNet 预训练；不要混用同仓库医学变体。本批尚未实现 DINOv2 加载器或自监督训练入口，该文件不能直接填入当前 ConvNeXt 配置。原版 MAE 官方权重采用 NC 许可，按当前比赛规则不列入下载方案。来源、规则与后续安排见 [路线评估](docs/experiments/多标签头_MIL_通用自监督路线评估_20261107.md)。
+## DINOv2 ViT-B/14 网格（2026-11-08）
 
-本批验收：108项自动测试通过；CPU/MPS合成数据流程、真实timm ConvNeXt、新查询头加载完整本地ImageNet权重、两平台各15份配置生成已检查。CUDA/Windows实际执行未测，也没有新结构正式训练成绩。独立审查未发现阻止交付的问题；具体覆盖和H3少量冗余计算说明见 [接口验收记录](docs/experiments/标签头接口验收_20261108.md)。
+权重下载地址为 Meta 官方 [DINOv2 ViT-B/14 checkpoint](https://dl.fbaipublicfiles.com/dinov2/dinov2_vitb14/dinov2_vitb14_pretrain.pth)，属于通用 LVD-142M 自监督预训练，不使用医疗模型或医疗数据；[官方代码和许可](https://github.com/facebookresearch/dinov2)。下载脚本会校验固定字节数 `346378731` 和 SHA-256 `0b8b82f85de91b424aded121c7e1dcc2b7bc6d0adeea651bf73a13307fad8c73`。输入边长均为14的倍数。基线文件为 [configs/dinov2_vitb14_baseline.yaml](configs/dinov2_vitb14_baseline.yaml)，保留 S5-L5 训练设置：15轮、warmup5、线性warmup后余弦退火、min LR `1e-6`、EMA `0.9998` 并仅用 EMA 验证选优、Study batch16、累积1、image chunk2、G1、Focal gamma2、自动 ratio posweight/cap20、关闭视角输入/过滤、梯度裁切和早停。训练用 CUDA AMP；FP16 只用于每次训练后的 EMA 推理权重导出。
+
+网格实验名和组合如下，共15次。配置文件、run_name 和输出目录使用相同的生成名称；所有试验使用种子42/2027/3407。
+
+| 实验 | 配置名 | 分辨率 | 学习率 | 数量 |
+| --- | --- | ---: | ---: | ---: |
+| D1 | `DINOv2_lr5e-5_seed{42,2027,3407}` | 252 | `5e-5` | 3 |
+| D2 | `DINOv2_lr1e-4_seed{42,2027,3407}` | 252 | `1e-4` | 3 |
+| D3 | `DINOv2_lr2e-4_seed{42,2027,3407}` | 252 | `2e-4` | 3 |
+| R224 | `DINOv2_res224_lr<best-lr>_seed{42,2027,3407}` | 224 | D1-D3胜出值 | 3 |
+| R280 | `DINOv2_res280_lr<best-lr>_seed{42,2027,3407}` | 280 | D1-D3胜出值 | 3 |
+
+先比较 D1-D3 三种子最佳 EMA 验证 macro AUC 均值选学习率，再以该学习率比较 R224、R280 和同学习率的 D1-D3（252）结果。只读固定 train/valid 清单；比赛测试标签、ViewPosition和临床字段不用于训练或选择。
+
+在 Windows/CUDA 项目目录执行以下命令。下载器写入权重及 `.source.json`，记录官方 URL、字节数和 SHA-256；模型创建只加载此本地权重，不会隐式联网：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\download_dinov2_weights.py
+.\.venv\Scripts\python.exe .\scripts\dinov2_grid.py stage1 --config-dir configs\generated\dinov2\stage1 --output-root runs\grid\dinov2\stage1 --device cuda
+```
+
+第一条网格命令默认只生成并验证9份配置。检查配置和 `grid_manifest.json` 后，用单独的 `run` 命令连续训练并在每个 run 完成后导出 `checkpoint-best-ema-fp16.pth`。第一阶段结束后汇总三种子验证结果：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\dinov2_grid.py run --config-dir configs\generated\dinov2\stage1
+.\.venv\Scripts\python.exe .\scripts\dinov2_grid.py select-lr --stage1-config-dir configs\generated\dinov2\stage1 --report outputs\dinov2\stage1_lr_selection.json
+.\.venv\Scripts\python.exe .\scripts\dinov2_grid.py stage2 --stage1-config-dir configs\generated\dinov2\stage1 --config-dir configs\generated\dinov2\stage2 --output-root runs\grid\dinov2\stage2 --device cuda
+```
+
+`stage2` 会从第一阶段完整的 `run_manifest.json` 中自动选均值最高的 LR，并生成6份配置；检查后运行 `.\.venv\Scripts\python.exe .\scripts\dinov2_grid.py run --config-dir configs\generated\dinov2\stage2` 开始第二阶段。`run` 会先核对配置哈希并拒绝已有 run 输出目录。若已有训练由其他方式完成，可按 `grid_manifest.json` 中的 `export_fp16_command` 单独导出 EMA FP16 权重。FP16 文件是部署/存储用导出，不是 FP16 训练权重；完整 checkpoint 与验证预测仍保留。
+
+此工程没有在 Mac 上启动15次正式训练；在目标 Windows CUDA 机器下载真实权重后，仍应先确认能够加载完整 checkpoint，再运行长训练。原版 MAE 官方权重采用 NC 许可，按当前比赛规则不列入方案。更多规则背景见 [通用自监督路线评估](docs/experiments/多标签头_MIL_通用自监督路线评估_20261107.md)。
+
+本批验收：136项自动测试通过；官方 DINOv2 checkpoint 已验证并真实加载，MPS 下224/252/280三档均完成10标签前向；第一阶段9份配置生成与路径校验通过。HEAD结构仍无正式训练成绩，DINOv2的15次Windows/CUDA正式训练尚未启动。CUDA训练未在本机执行。其他结构接口覆盖与H3少量冗余计算说明见 [接口验收记录](docs/experiments/标签头接口验收_20261108.md)。

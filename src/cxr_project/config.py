@@ -69,6 +69,8 @@ def load_config(path):
     for key in ("input_size", "epochs", "batch_size_studies", "accum_steps"):
         if type(config[key]) is not int or config[key] < 1:
             raise ValueError(f"{key} must be at least 1")
+    if config["model"] == "vit_base_patch14_dinov2" and config["input_size"] % 14:
+        raise ValueError("DINOv2 ViT-B/14 input_size must be divisible by 14")
     if int(config["warmup_epochs"]) < 0 or int(config["warmup_epochs"]) >= int(config["epochs"]):
         raise ValueError("warmup_epochs must be non-negative and less than epochs")
     for key in ("lr", "min_lr", "weight_decay", "max_pos_weight", "focal_gamma"):

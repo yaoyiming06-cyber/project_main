@@ -11,6 +11,8 @@ from torch.utils.checkpoint import checkpoint
 
 from .labels import HARD_LABEL_INDICES, NUM_LABELS, VIEW_NAMES
 from .grid_options import HEAD_DEFAULTS, validate_head_options
+from .general_weights import DINOV2_MODEL
+from .dinov2_weights import validate_checkpoint as validate_dinov2_checkpoint
 from .heads import LabelwiseClassifier, SpatialLabelQuery
 from .pooling import LabelAttentionPooling
 
@@ -268,6 +270,7 @@ class ConvNeXtStudyClassifier(nn.Module):
 
 SUPPORTED_MODELS = {
     MODEL_NAME: 'ImageNet-22K / Meta ConvNeXt',
+    DINOV2_MODEL: 'LVD-142M general-purpose self-supervised / Meta DINOv2',
     'convnext_small.fb_in22k': 'ImageNet-22K / Meta ConvNeXt',
     'swin_base_patch4_window7_224.ms_in22k': 'ImageNet-22K / Microsoft Swin',
     'vit_base_patch16_224.augreg_in21k': 'ImageNet-21K / Google AugReg ViT',
@@ -324,9 +327,9 @@ def configure_backbone_training(model, freeze_backbone=False, unfreeze_last_stag
 def build_model(config, pretrained_checkpoint=None, pretrained=None):
     """Build an explicitly named general-pretrained backbone, with no model fallback.
 
-    New backbones require local safetensors and an expected SHA256 when pretrained.
-    The existing Base checkpoint retains its built-in pinned hash. No implicit
-    network downloads occur here. ViT adapters are installed after weight loading.
+    New backbones require verified local weights and an expected SHA256 when
+    pretrained. No implicit network downloads occur here. ViT adapters are
+    installed after weight loading.
     """
     validate_head_options(config)
     name = str(config.get('model', MODEL_NAME))
@@ -354,11 +357,18 @@ def build_model(config, pretrained_checkpoint=None, pretrained=None):
             digest = str(config.get('pretrained_sha256') or '').lower()
             if len(digest) != 64 or any(c not in '0123456789abcdef' for c in digest):
                 raise ValueError('pretrained_sha256 is required for new pretrained backbones')
-            if file_sha256(checkpoint_path) != digest:
-                raise ValueError('pretrained checkpoint SHA-256 mismatch')
-            if checkpoint_path.suffix != '.safetensors':
-                raise ValueError('new backbone weights must be timm Hugging Face .safetensors files')
-            kwargs['pretrained_cfg_overlay'] = {'file': str(checkpoint_path), 'custom_load': False}
+            if name == DINOV2_MODEL:
+                validate_dinov2_checkpoint(checkpoint_path, digest)
+                kwargs['pretrained_cfg_overlay'] = {
+                    'file': str(checkpoint_path),
+                    'custom_load': False,
+                }
+            else:
+                if file_sha256(checkpoint_path) != digest:
+                    raise ValueError('pretrained checkpoint SHA-256 mismatch')
+                if checkpoint_path.suffix != '.safetensors':
+                    raise ValueError('new backbone weights must be timm Hugging Face .safetensors files')
+                kwargs['pretrained_cfg_overlay'] = {'file': str(checkpoint_path), 'custom_load': False}
         backbone = timm.create_model(name, pretrained=pretrained, **kwargs)
         if adaptformer:
             from .adapters import install_adaptformer
