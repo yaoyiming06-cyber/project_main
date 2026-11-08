@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add verified official DINOv2 ViT-B/14 supervised fine-tuning support and generate the approved 15-run staged LR/resolution grid with FP16 EMA inference exports.
+**Goal:** Add verified official DINOv2 ViT-B/14 supervised fine-tuning support and generate the approved 21-run staged LR/resolution grid with FP16 EMA inference exports.
 
 **Architecture:** Reuse the existing timm VisionTransformer backbone wrapper, Study-level classifier, training loop, EMA, validation and export path. Add a DINOv2-specific official-checkpoint downloader/provenance validator and a small grid generator with separate LR-selection and resolution-comparison stages. Config generation and training execution are separate CLI commands.
 
@@ -70,7 +70,7 @@ Run: `.venv-mac/bin/python -m unittest discover -s tests -p 'test_dinov2_*.py' -
 
 Expected: PASS for model construction, patch-size validation, logits, and checkpoint provenance.
 
-### Task 3: Generate the staged 15-run grid
+### Task 3: Generate the staged 21-run grid
 
 **Files:**
 - Create: `configs/dinov2_vitb14_baseline.yaml`
@@ -80,7 +80,7 @@ Expected: PASS for model construction, patch-size validation, logits, and checkp
 
 - [x] **Step 1: Add failing tests for both grid stages**
 
-Test stage 1 produces exactly 9 unique configs for 3 learning rates (`5e-5`, `1e-4`, `2e-4`) × seeds (42, 2027, 3407), all at size 252. Test stage 2 produces exactly 6 configs for sizes 224 and 280 × the same seeds at one explicitly selected stage-1 learning rate. Assert every generated config preserves the baseline's 15 epochs, 5 warmup epochs, `min_lr=1e-6`, EMA `0.9998`, EMA validation selection, batch 16, accumulation 1, image chunk 2, G1, Focal gamma 2, ratio/cap20, no view input/filter, no clipping, and no early stopping. Assert unique output paths and embedded checkpoint SHA-256.
+Test stage 1 produces exactly 15 unique configs for 5 learning rates (`2.5e-5`, `5e-5`, `1e-4`, `2e-4`, `4e-4`) × seeds (42, 2027, 3407), all at size 252. Test stage 2 produces exactly 6 configs for sizes 224 and 280 × the same seeds at one explicitly selected stage-1 learning rate. Assert every generated config preserves the baseline's 15 epochs, 5 warmup epochs, `min_lr=1e-6`, EMA `0.9998`, EMA validation selection, batch 16, accumulation 1, image chunk 2, G1, Focal gamma 2, ratio/cap20, no view input/filter, no clipping, and no early stopping. Assert unique output paths and embedded checkpoint SHA-256.
 
 - [x] **Step 2: Run the focused tests and confirm they fail**
 
@@ -90,11 +90,11 @@ Expected: FAIL because the baseline and DINOv2 grid commands do not exist.
 
 - [x] **Step 3: Implement an explicit two-stage config generator**
 
-Create a `stage1` command that writes the 9 LR configs and manifest. Create a `stage2` command that reads all nine completed run manifests, picks the best LR by three-seed mean, then writes the 6 resolution configs. Both commands must resolve the checkpoint and data paths, verify the local weight provenance, avoid overwriting non-empty config/output directories, validate every YAML using `load_config`, and never start training. A separate `run` command verifies generated config hashes and executes the stage sequentially, exporting best EMA weights as FP16 after each successful run. Record each config path, SHA-256, grid factors, checkpoint provenance and exact commands in `grid_manifest.json`.
+Create a `stage1` command that writes the 15 LR configs and manifest. Create a `stage2` command that reads all fifteen completed run manifests, picks the best LR by three-seed mean, then writes the 6 resolution configs. Both commands must resolve the checkpoint and data paths, verify the local weight provenance, avoid overwriting non-empty config/output directories, validate every YAML using `load_config`, and never start training. A separate `run` command verifies generated config hashes and executes the stage sequentially, exporting best EMA weights as FP16 after each successful run. Record each config path, SHA-256, grid factors, checkpoint provenance and exact commands in `grid_manifest.json`.
 
 - [x] **Step 4: Add the baseline and run generation tests**
 
-Copy the verified S5-L5 experiment factors into the DINOv2 baseline, changing only model/checkpoint, LR placeholder, patch-aligned input size, and pretrained normalization. Keep effective Study batch 16 (`batch_size_studies: 16`, `accum_steps: 1`), image chunk 2, 15 epochs and 5 warmup epochs. Then run `.venv-mac/bin/python -m unittest discover -s tests -p 'test_dinov2_grid.py' -v` and expect PASS with 9 and 6 configs.
+Copy the verified S5-L5 experiment factors into the DINOv2 baseline, changing only model/checkpoint, LR placeholder, patch-aligned input size, and pretrained normalization. Keep effective Study batch 16 (`batch_size_studies: 16`, `accum_steps: 1`), image chunk 2, 15 epochs and 5 warmup epochs. Then run `.venv-mac/bin/python -m unittest discover -s tests -p 'test_dinov2_grid.py' -v` and expect PASS with 15 and 6 configs.
 
 ### Task 4: Verify training and FP16 export compatibility
 

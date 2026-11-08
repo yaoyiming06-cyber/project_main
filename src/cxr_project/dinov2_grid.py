@@ -14,7 +14,7 @@ from .general_weights import DINOV2_MODEL
 
 
 SEEDS = (42, 2027, 3407)
-LEARNING_RATES = (5e-5, 1e-4, 2e-4)
+LEARNING_RATES = (2.5e-5, 5e-5, 1e-4, 2e-4, 4e-4)
 RESOLUTIONS = (224, 252, 280)
 
 
@@ -95,8 +95,9 @@ def select_best_learning_rate(stage1_config_dir):
     if not isinstance(manifest, dict):
         raise ValueError("stage-1 grid manifest must contain a JSON object")
     jobs = manifest.get("jobs")
-    if manifest.get("stage") != "stage1" or not isinstance(jobs, list) or len(jobs) != 9:
-        raise ValueError("stage-1 manifest must contain exactly nine LR/seed runs")
+    expected_runs = len(LEARNING_RATES) * len(SEEDS)
+    if manifest.get("stage") != "stage1" or not isinstance(jobs, list) or len(jobs) != expected_runs:
+        raise ValueError(f"stage-1 manifest must contain exactly {expected_runs} LR/seed runs")
 
     records = {}
     for job in jobs:
@@ -132,7 +133,7 @@ def select_best_learning_rate(stage1_config_dir):
 
     expected = {(lr, seed) for lr in LEARNING_RATES for seed in SEEDS}
     if set(records) != expected:
-        raise ValueError("stage-1 results must include each of three learning rates and all three seeds")
+        raise ValueError("stage-1 results must include each of five learning rates and all three seeds")
 
     summaries = []
     for lr in LEARNING_RATES:

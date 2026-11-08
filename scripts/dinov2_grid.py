@@ -36,7 +36,7 @@ def execute_grid(config_dir):
     manifest_path = directory / "grid_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     jobs = manifest.get("jobs") if isinstance(manifest, dict) else None
-    expected_runs = {"stage1": 9, "stage2": 6}.get(manifest.get("stage")) if isinstance(manifest, dict) else None
+    expected_runs = {"stage1": 15, "stage2": 6}.get(manifest.get("stage")) if isinstance(manifest, dict) else None
     if expected_runs is None or not isinstance(jobs, list) or len(jobs) != expected_runs:
         raise ValueError("grid manifest has an invalid stage or run count")
     for job in jobs:

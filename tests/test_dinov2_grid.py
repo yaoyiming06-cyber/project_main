@@ -20,7 +20,7 @@ from scripts.dinov2_grid import execute_grid, main as grid_main
 
 
 SEEDS = (42, 2027, 3407)
-LEARNING_RATES = (5e-5, 1e-4, 2e-4)
+LEARNING_RATES = (2.5e-5, 5e-5, 1e-4, 2e-4, 4e-4)
 
 
 class DINOv2GridTests(unittest.TestCase):
@@ -72,7 +72,7 @@ class DINOv2GridTests(unittest.TestCase):
         self.pinned_weights_patch.stop()
         self.temp_dir.cleanup()
 
-    def test_stage_one_generates_nine_lr_seed_configs_without_other_changes(self):
+    def test_stage_one_generates_fifteen_lr_seed_configs_without_other_changes(self):
         configs = build_stage_configs(
             self.baseline,
             stage="stage1",
@@ -80,8 +80,8 @@ class DINOv2GridTests(unittest.TestCase):
             output_root=self.root / "runs" / "stage1",
             checkpoint_path=self.weights,
         )
-        self.assertEqual(len(configs), 9)
-        self.assertEqual(len({c["output_dir"] for c in configs.values()}), 9)
+        self.assertEqual(len(configs), 15)
+        self.assertEqual(len({c["output_dir"] for c in configs.values()}), 15)
         self.assertEqual({c["lr"] for c in configs.values()}, set(LEARNING_RATES))
         self.assertEqual({c["seed"] for c in configs.values()}, set(SEEDS))
         self.assertEqual({c["input_size"] for c in configs.values()}, {252})
@@ -152,7 +152,7 @@ class DINOv2GridTests(unittest.TestCase):
             checkpoint_path=self.weights,
             python_executable="python-test",
         )
-        self.assertEqual(len(manifest["jobs"]), 9)
+        self.assertEqual(len(manifest["jobs"]), 15)
         self.assertFalse(manifest["execution_requested"])
         self.assertEqual(manifest["jobs"][0]["command"][0], "python-test")
         self.assertIn("export-fp16", manifest["jobs"][0]["export_fp16_command"])
@@ -198,9 +198,9 @@ class DINOv2GridTests(unittest.TestCase):
                     "--device", "cuda",
                 ])
             run_jobs.assert_not_called()
-            self.assertEqual(len(generated["jobs"]), 9)
+            self.assertEqual(len(generated["jobs"]), 15)
             executed = execute_grid(config_dir)
-        self.assertEqual(run_jobs.call_count, 18)
+        self.assertEqual(run_jobs.call_count, 30)
         self.assertIn("cxr_project.train", run_jobs.call_args_list[0].args[0])
         self.assertIn("export-fp16", run_jobs.call_args_list[1].args[0])
         self.assertEqual(executed["execution_status"], "completed")
@@ -239,9 +239,9 @@ class DINOv2GridTests(unittest.TestCase):
             "jobs": jobs,
         }), encoding="utf-8")
         result = select_best_learning_rate(config_dir)
-        self.assertEqual(result["best_lr"], 1e-4)
+        self.assertEqual(result["best_lr"], 5e-5)
         self.assertEqual(result["runs_per_learning_rate"], 3)
-        self.assertEqual(len(result["by_learning_rate"]), 3)
+        self.assertEqual(len(result["by_learning_rate"]), 5)
         self.assertTrue(all(row["sample_std"] >= 0 for row in result["by_learning_rate"]))
 
     def test_best_lr_rejects_incomplete_stage_one(self):
@@ -251,7 +251,7 @@ class DINOv2GridTests(unittest.TestCase):
             "stage": "stage1",
             "jobs": [],
         }), encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "exactly nine"):
+        with self.assertRaisesRegex(ValueError, "exactly 15"):
             select_best_learning_rate(config_dir)
 
 

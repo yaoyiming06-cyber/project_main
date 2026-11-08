@@ -2,7 +2,7 @@
 
 ## Goal
 
-Compare three learning rates and then three patch-aligned input resolutions for the original, general-purpose DINOv2 ViT-B/14 checkpoint. Retain a compact FP16 EMA inference export for each run. This is supervised fine-tuning, not DINO self-supervised continuation.
+Compare five learning rates and then three patch-aligned input resolutions for the original, general-purpose DINOv2 ViT-B/14 checkpoint. Retain a compact FP16 EMA inference export for each run. This is supervised fine-tuning, not DINO self-supervised continuation.
 
 ## Experiment Grid
 
@@ -10,10 +10,10 @@ Use the official `vit_base_patch14_dinov2` model and its LVD-142M general pretra
 
 | Stage | Input size | Learning rate | Seeds | Runs |
 | --- | ---: | --- | --- | ---: |
-| LR selection | 252 | 0.00005, 0.00010, 0.00020 | 42, 2027, 3407 | 9 |
+| LR selection | 252 | 0.000025, 0.00005, 0.00010, 0.00020, 0.00040 | 42, 2027, 3407 | 15 |
 | Resolution comparison | 224, 280 | Best LR from stage 1 | 42, 2027, 3407 | 6 |
 
-This produces fifteen independent runs, each initialized from the same pinned DINOv2 weights. Select the stage-1 learning rate by the mean of its three fixed validation macro AUC scores. Then compare 224, 252, and 280 at that learning rate by their three-seed validation means. Report each seed score, sample standard deviation, per-label AUC, and best EMA epoch. The held-out competition test data is not read or used for selection. All three resolutions are divisible by the 14-pixel patch size.
+This produces twenty-one independent runs, each initialized from the same pinned DINOv2 weights. Select the stage-1 learning rate by the mean of its three fixed validation macro AUC scores. Then compare 224, 252, and 280 at that learning rate by their three-seed validation means. Report each seed score, sample standard deviation, per-label AUC, and best EMA epoch. The held-out competition test data is not read or used for selection. All three resolutions are divisible by the 14-pixel patch size.
 
 ## Fixed Training Protocol
 
