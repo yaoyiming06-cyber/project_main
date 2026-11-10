@@ -1,0 +1,60 @@
+{
+  "format": "cxr_distillation_teachers_v1",
+  "source_submission_sha256": "f4586f848e1bbf2b3e39ef9a6719b038bb4bd555c30129924a55895608e84fc2",
+  "official_auc_user_reported": 0.7779,
+  "fusion": "equal_probability_mean",
+  "models": [
+    {
+      "name": "S3_I2_seed42",
+      "config": "configs/distill_teacher_S3_I2_seed42.yaml",
+      "checkpoint": "weights/teachers/S3_I2_seed42_checkpoint-best-ema.pth",
+      "checkpoint_sha256": "156881334192fd38f72236381f35c9437199eed11c7a5888ca46e7ad6c0dbe55",
+      "config_sha256": "d628044085c90eb50a5ac10ff33b12e6aefd3f678539fa0481ad3dda91af4d6a",
+      "weights": "ema",
+      "fusion_weight": 0.2,
+      "original_local_checkpoint": "/Volumes/Extreme SSD/计挑_副本/project_main/runs/grid/seed42/S3/S3_I2_seed42/checkpoint-best-ema.pth"
+    },
+    {
+      "name": "S3_I3_seed3407",
+      "config": "configs/distill_teacher_S3_I3_seed3407.yaml",
+      "checkpoint": "weights/teachers/S3_I3_seed3407_checkpoint-best-ema.pth",
+      "checkpoint_sha256": "6788a1d14331ae34f5f81aa4a6feb16241451bff6e9fad0881e3b9b048faae93",
+      "config_sha256": "9ce67f7be15d22735dbe273e90274ebb2cc7e6357e179b3768c0ca147f96a74f",
+      "weights": "ema",
+      "fusion_weight": 0.2,
+      "original_local_checkpoint": "/Volumes/Extreme SSD/计挑_副本/project_main/runs/grid/seed3407/S3/S3_I3_seed3407/checkpoint-best-ema.pth"
+    },
+    {
+      "name": "S3_I4_seed2027",
+      "config": "configs/distill_teacher_S3_I4_seed2027.yaml",
+      "checkpoint": "weights/teachers/S3_I4_seed2027_checkpoint-best-ema.pth",
+      "checkpoint_sha256": "f254cfc90022c3f5e96b62d8673debbe7edd4f09fe226eee49f85d58b48581b6",
+      "config_sha256": "dd301bfe60942515a016140ea00f6c68f1ba77e7262bfe6f485837d831675345",
+      "weights": "ema",
+      "fusion_weight": 0.2,
+      "original_local_checkpoint": "/Volumes/Extreme SSD/计挑_副本/project_main/outputs/competition/convnext5_pure_image_20261101/selected_checkpoints/S3_I4_seed2027_checkpoint-best-ema.pth"
+    },
+    {
+      "name": "S3_I2_seed3407",
+      "config": "configs/distill_teacher_S3_I2_seed3407.yaml",
+      "checkpoint": "weights/teachers/S3_I2_seed3407_checkpoint-best-ema.pth",
+      "checkpoint_sha256": "af34927dcb766e72fc1cf8576ea0b92db275efc6baeb39e5db7e91ec436c5fba",
+      "config_sha256": "fe721473b7ee69c9917560a77abc89da5fe56bb7b8b3e68fa24e514a4cba97df",
+      "weights": "ema",
+      "fusion_weight": 0.2,
+      "original_local_checkpoint": "/Volumes/Extreme SSD/计挑_副本/project_main/outputs/competition/convnext5_equal_20261101/selected_checkpoints/S3_I2_seed3407_checkpoint-best-ema.pth"
+    },
+    {
+      "name": "S0_M4_seed2027",
+      "config": "configs/distill_teacher_S0_M4_seed2027.yaml",
+      "checkpoint": "weights/teachers/S0_M4_seed2027_checkpoint-best-ema.pth",
+      "checkpoint_sha256": "2aa8b9ad1fbb1279eaadb43bc6fd9bfeea6d80cf3be12592cfd634190ff9b0bb",
+      "config_sha256": "20306c001a496c192f5fe0b1b26c23e451092f4c652236281a4f0083f7821cc6",
+      "weights": "ema",
+      "fusion_weight": 0.2,
+      "original_local_checkpoint": "/Volumes/Extreme SSD/计挑_副本/project_main/outputs/competition/convnext5_pure_image_20261101/selected_checkpoints/S0_M4_seed2027_checkpoint-best-ema.pth"
+    }
+  ],
+  "train_manifest_sha256": "2a24fa8a409d0b74eab502e2a54b0ba3358e2e2f7c57c8a08ea94884694bd0cd",
+  "valid_manifest_sha256": "6a22c82e425fdf446cb98ae728d8f483b755b77e0f16b3f3e3c45d879601ef0e"
+}

@@ -21,6 +21,7 @@ DEFAULTS = {
  "asl_gamma_neg": 4., "asl_gamma_pos": 0., "asl_clip": .05,
  "evaluate_raw_and_ema": False, "validation_weights": "auto",
  "final_training": False, "project_root": None, "train_label_indices": None,
+ "distillation_cache": None, "distillation_alpha": 0., "distillation_temperature": 1.,
 }
 def validate_head_options(c):
  """Reject unsupported architecture combinations before reading data/weights."""
@@ -52,6 +53,21 @@ OPTIONAL_KEYS = set(DEFAULTS) | {
 }
 def validate_options(c):
  validate_head_options(c)
+ alpha = c['distillation_alpha']
+ temperature = c['distillation_temperature']
+ if isinstance(alpha, bool) or not isinstance(alpha, (int,float)) or not math.isfinite(alpha) or not 0 <= alpha < 1:
+  raise ValueError('distillation_alpha must be a finite number in [0,1)')
+ if isinstance(temperature, bool) or not isinstance(temperature, (int,float)) or not math.isfinite(temperature) or temperature <= 0:
+  raise ValueError('distillation_temperature must be finite and positive')
+ cache = c['distillation_cache']
+ if alpha > 0:
+  if not isinstance(cache, str) or not cache.strip() or not cache.endswith('.npz'):
+   raise ValueError('active distillation requires distillation_cache ending in .npz')
+  if (c['mixup_alpha'] != 0 or c['use_view_embedding'] or c['view_filter'] is not None
+      or c['train_label_indices'] is not None or c['final_training']):
+   raise ValueError('distillation requires image-only full-label training, no MixUp or final_training')
+ elif cache is not None:
+  raise ValueError('distillation_cache requires distillation_alpha > 0')
  for key in ('ema','freeze_backbone','experts_enabled','use_view_embedding','adaptformer','clahe',
              'horizontal_flip','evaluate_raw_and_ema','final_training','amp','pretrained','pin_memory','gradient_checkpointing'):
   if type(c[key]) is not bool: raise ValueError(f'{key} must be a YAML boolean')

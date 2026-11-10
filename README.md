@@ -403,3 +403,61 @@ PY
 此工程没有在 Mac 上启动正式训练；在目标 Windows CUDA 机器下载真实权重后，仍应先确认能够加载完整 checkpoint，再运行长训练。原版 MAE 官方权重采用 NC 许可，按当前比赛规则不列入方案。更多规则背景见 [通用自监督路线评估](docs/experiments/多标签头_MIL_通用自监督路线评估_20261107.md)。
 
 本批验收：136项自动测试通过；官方 DINOv2 checkpoint 已验证并真实加载，MPS 下224/252/280三档均完成10标签前向；第一阶段15份配置生成与路径校验通过。HEAD结构仍无正式训练成绩，DINOv2的21次Windows/CUDA正式训练尚未启动。CUDA训练未在本机执行。其他结构接口覆盖与H3少量冗余计算说明见 [接口验收记录](docs/experiments/标签头接口验收_20261108.md)。
+
+## 五模型离线蒸馏（2026-11-09）
+
+目标是把此前用户反馈比赛AUC为77.79的五模型融合迁移到一个ConvNeXt-Base学生，最终导出约177MB的FP16推理权重。蒸馏不保证保留全部融合收益或超过77.79；这批代码尚未完成真实蒸馏训练。教师只预测A_exclude2训练集，不生成验证集或比赛测试集软标签，不读ViewPosition/临床字段，不做患者平滑或TTA，不合并train+valid。
+
+固定教师配方为 [distillation_teachers_7779.json](configs/distillation_teachers_7779.json)。五个教师均选EMA、各占20%，配置保持各自原生分辨率；必须使用对应的**已训练完整模型checkpoint**，不能拿ImageNet初始化权重替代，也不能误用raw。
+
+| 教师 | 输入分辨率 | 放在项目中的文件 |
+| --- | ---: | --- |
+| S3_I2_seed42 | 384 | `weights/teachers/S3_I2_seed42_checkpoint-best-ema.pth` |
+| S3_I3_seed3407 | 448 | `weights/teachers/S3_I3_seed3407_checkpoint-best-ema.pth` |
+| S3_I4_seed2027 | 192 | `weights/teachers/S3_I4_seed2027_checkpoint-best-ema.pth` |
+| S3_I2_seed3407 | 384 | `weights/teachers/S3_I2_seed3407_checkpoint-best-ema.pth` |
+| S0_M4_seed2027 | 224 | `weights/teachers/S0_M4_seed2027_checkpoint-best-ema.pth` |
+
+请将原五份checkpoint按表复制到训练机，JSON里的`original_local_checkpoint`保留本机来源供核对，实际运行只使用相对路径`checkpoint`。配方固定了五份checkpoint SHA-256及各教师配置SHA-256；改名可以，文件内容必须一致。不要直接用另行导出的FP16教师替换这五份源文件，因为哈希会改变。五份教师原文件和每个教师的预测进度仅供训练，不放进最终500MB推理包；这些目录已加入Git忽略规则。
+
+学生配置：[Windows/CUDA](configs/distill_convnext_base_seed42.yaml)、[16GB Mac/MPS](configs/distill_convnext_base_seed42_mac.yaml)。保留S5-L5设置：256分辨率、15轮、warmup5、AdamW LR5e-4/min LR1e-6、余弦衰减、WD.10、layer decay.65、drop path.10、G1、Focal gamma2、ratio posweight/cap20、EMA.9998、仅EMA选优、关闭早停/梯度裁切/视角。Windows采用Study batch2×累积8，Mac采用batch1×累积16，均为有效batch16。学生从原始通用ImageNet-22K权重重新初始化；蒸馏不能用`--resume`加载教师checkpoint。
+
+新增参数：
+
+```yaml
+distillation_cache: data/distillation/teachers_7779_train.npz
+distillation_alpha: 0.5
+distillation_temperature: 1.0
+```
+
+训练总损失为`(1-alpha)*原监督损失 + alpha*T²*软标签BCE`。软标签由各教师最终十标签sigmoid概率等权平均得到，缓存为FP32以保留概率细节；温度作用于融合概率的logit，不对10标签做softmax。监督项保留原有posweight/Focal/辅助专家损失；蒸馏项用最终融合主头与专家头后的十标签logits、不加posweight或Focal，并与监督项一致忽略`-1`标签。默认T=1；alpha=.5是首轮起点，并非已验证最优配置。学生G1增强与教师确定性预测构成一致性训练。首版不支持蒸馏与MixUp、标签子集或final_training混用。
+
+在Windows项目根目录依次执行。第一步需要五个教师checkpoint；第二步只需缓存和学生初始化权重，教师不再加载。普通训练配置默认alpha=0、cache=null，行为保持原样。
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\cache_distillation_teachers.py --student-config configs\distill_convnext_base_seed42.yaml --teachers configs\distillation_teachers_7779.json --output data\distillation\teachers_7779_train.npz --device cuda --batch-size 2 --num-workers 4
+if ($LASTEXITCODE -ne 0) { throw "Teacher cache failed" }
+.\.venv\Scripts\python.exe -m cxr_project.train --config configs\distill_convnext_base_seed42.yaml --device cuda
+if ($LASTEXITCODE -ne 0) { throw "Student training failed" }
+.\.venv\Scripts\python.exe .\scripts\evaluate_grid.py export-fp16 --checkpoint runs\distillation\KD7779_ConvNeXtB_seed42\checkpoint-best-ema.pth --output runs\distillation\KD7779_ConvNeXtB_seed42\checkpoint-best-ema-fp16.pth --weights ema
+```
+
+教师按顺序加载，各自在原生尺寸推理训练Study。本批教师YAML保留此前推理的`amp:false`，默认教师预测使用FP32；学生Windows训练仍用AMP，最终导出FP16。此前77.79提交在Mac上运行，跨设备结果仍不能当作逐位复现。缓存脚本记录推理设备、精度和批量并核对文件来源，不会重新训练教师。448教师若显存不足可将`--batch-size`降为1。每个教师完成后保存到`data/distillation/teachers_7779_train.teachers/`；最终`.npz`和`.json`不存在时，重复原命令会复用来源/运行参数一致的完整教师预测。修改批量、设备、教师配置或权重后应使用新的输出路径；对半写入的缓存会报错，不能悄悄继续。最终缓存已存在时拒绝覆盖；直接开始学生训练即可。
+
+缓存和JSON sidecar必须一起保留。学生每次启动/续训均核对缓存内容哈希、train/valid清单哈希、标签顺序、完整Study覆盖和train/valid患者不重叠；不按CSV行号直接配对。train/valid CSV字节变化即要求重建缓存。`.gitattributes`要求Git保留教师YAML及train/valid清单的原始字节，防止Windows自动转换换行符破坏固定哈希；请勿用Excel或编辑器另存这些文件。缓存记录的是固定清单下的图像，移动到Windows时需保持相同图像内容与相对路径。软件不对全体图像逐文件计算像素哈希。
+
+中断学生训练后使用原配置和学生自己的last checkpoint恢复：
+
+```powershell
+.\.venv\Scripts\python.exe -m cxr_project.train --config configs\distill_convnext_base_seed42.yaml --resume runs\distillation\KD7779_ConvNeXtB_seed42\checkpoint-last.pth --device cuda
+```
+
+训练输出沿用`epoch_metrics_ema.csv`、`valid_best_ema_predictions.csv`和checkpoint，并新增`distillation_metrics.csv`分别记录监督项、蒸馏项与总损失。缓存来源写入checkpoint/run_manifest；换缓存或蒸馏系数不能接着旧训练恢复。变更种子时另存YAML并同时更改`seed/run_name/output_dir`；同一缓存可复用。验证和选优仅使用真实验证标签。
+
+Mac用`.venv-mac/bin/python`，缓存命令选择`--student-config configs/distill_convnext_base_seed42_mac.yaml --device mps --batch-size 1 --num-workers 0`，训练选择同一Mac YAML及`--device mps`；Mac学生输出目录为`runs/distillation/KD7779_ConvNeXtB_seed42_mac`。Mac训练/推理走FP32，FP16仅为最终权重存储格式。
+
+最终提交只保留学生FP16权重、对应配置及推理代码/依赖说明；不需要教师、软标签缓存、ImageNet初始化文件、优化器状态。现有`predict.py`/`predict_test.py`/`cost.py`可加载学生导出；配置中的蒸馏路径不会在推理阶段打开。FP16导出后仍须对同一验证集重新推理比较AUC与概率误差，导出成功本身不代表精度已验证。
+
+若同机同尺寸普通学生训练约5小时，离线蒸馏学生可先预算5～6小时，教师缓存另预算0.5～2小时；五教师含384/448尺寸，实际时间需看缓存脚本打印的批次和耗时。此估计不是实测，CPU/MPS不套用Windows/CUDA耗时。
+
+实现验收：本次提交快照完整156项自动测试通过，包含12项新增蒸馏测试；覆盖教师EMA概率平均/缓存复用、打乱与重复Study对齐、缓存篡改/患者交叉拒绝、学生训练/EMA/中断恢复、删除教师及缓存后的FP16学生推理。五份本机真实教师checkpoint的SHA-256、配置兼容性、EMA选择及参数键/形状也已核对一致；未对真实训练图运行教师缓存、未启动正式蒸馏、未测Windows CUDA耗时或蒸馏AUC。

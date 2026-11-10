@@ -1,0 +1,4 @@
+# Distillation pins byte hashes: preserve the committed bytes on every platform.
+configs/distill_teacher_*.yaml -text
+data/manifests/train_manifest.csv -text
+data/manifests/valid_manifest.csv -text

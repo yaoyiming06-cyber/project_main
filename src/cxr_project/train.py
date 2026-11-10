@@ -261,6 +261,7 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
                     module.train()
     optimizer.zero_grad(set_to_none=True)
     running_loss = 0.0
+    hard_loss_sum = soft_loss_sum = 0.0
     seen_studies = 0
     steps_per_epoch = len(loader)
 
@@ -304,7 +305,19 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
             loss, _ = mixed_training_loss(main_logits.float(), expert_logits.float(), targets,
                                          pos_weights, permutation, lam, **loss_kwargs)
         else:
-            loss, _ = compute_training_loss(main_logits.float(), expert_logits.float(), targets, pos_weights, **loss_kwargs)
+            loss, combined = compute_training_loss(main_logits.float(), expert_logits.float(), targets, pos_weights, **loss_kwargs)
+        hard_loss = loss
+        cache = config.get("_distillation_cache")
+        if cache is not None:
+            from .distillation import distillation_loss
+            soft_loss = distillation_loss(
+                combined, cache.lookup(batch["study_ids"], device), targets,
+                temperature=config["distillation_temperature"],
+            )
+            kd_alpha = float(config["distillation_alpha"])
+            loss = (1 - kd_alpha) * hard_loss + kd_alpha * soft_loss
+            hard_loss_sum += hard_loss.detach().item() * targets.shape[0]
+            soft_loss_sum += soft_loss.detach().item() * targets.shape[0]
         if not torch.isfinite(loss):
             raise FloatingPointError(f"non-finite loss at epoch {epoch + 1}, batch {step + 1}")
         current_studies = int(targets.shape[0])
@@ -323,6 +336,12 @@ def _train_epoch(model, loader, dataset_size, optimizer, scaler, device, config,
                 f"loss={loss.detach().item():.5f} lr={optimizer.param_groups[-1]['lr']:.7g}",
                 flush=True,
             )
+    if config.get("_distillation_cache") is not None:
+        config["_distillation_epoch_metrics"] = {
+            "hard_loss": hard_loss_sum / max(1, seen_studies),
+            "soft_loss": soft_loss_sum / max(1, seen_studies),
+            "total_loss": running_loss / max(1, seen_studies),
+        }
     return running_loss / max(1, seen_studies), global_step
 
 
@@ -353,12 +372,17 @@ def _validate_resume(checkpoint, config, data_summary):
     from .grid_options import HEAD_DEFAULTS
     previous = {**HEAD_DEFAULTS, **previous}
     config = {**HEAD_DEFAULTS, **config}
+    for key, default in (("distillation_alpha", 0.), ("distillation_temperature", 1.), ("distillation_cache", None)):
+        previous.setdefault(key, default)
+        config.setdefault(key, default)
     ignored = {"output_dir", "run_name", "project_root", "num_workers", "pin_memory",
-               "image_root", "pretrained_checkpoint", "train_manifest", "valid_manifest", "test_manifest"}
+               "image_root", "pretrained_checkpoint", "train_manifest", "valid_manifest", "test_manifest", "distillation_cache"}
     changed = [key for key, value in previous.items() if key not in ignored and config.get(key) != value]
     if changed:
         raise ValueError(f"resume configuration differs: {changed}; use a new experiment")
     previous_data = checkpoint.get("data")
+    if (previous_data or {}).get("distillation") != data_summary.get("distillation"):
+        raise ValueError("resume distillation cache/provenance differs; use a new experiment")
     if previous_data:
         for key in ("train_manifest_sha256", "valid_manifest_sha256"):
             if previous_data.get(key) != data_summary.get(key):
@@ -380,6 +404,16 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
                     "valid_manifest": str(valid_manifest) if valid_manifest else None,
                     "train_manifest_sha256": _file_sha256(train_manifest),
                     "valid_manifest_sha256": _file_sha256(valid_manifest) if valid_manifest else None}
+    if config["distillation_alpha"] > 0:
+        from .distillation import TeacherCache
+        from .manifest import read_study_manifest
+        studies = read_study_manifest(train_manifest, include_view_positions=False)
+        cache = TeacherCache(
+            resolve_path(config, "distillation_cache"), train_manifest=train_manifest,
+            valid_manifest=valid_manifest, study_ids=[s.study_id for s in studies],
+        )
+        config["_distillation_cache"] = cache
+        data_summary["distillation"] = cache.provenance
     checkpoint = torch.load(Path(resume), map_location="cpu", weights_only=False) if resume else None
     if checkpoint is not None:
         _validate_resume(checkpoint, config, data_summary)
@@ -439,7 +473,7 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
         _restore_rng(checkpoint.get("rng_state"), generator, sampler)
         if Path(resume).resolve().parent != run_dir:
             import shutil
-            for pattern in ("checkpoint-best*.pth", "valid_best*predictions.csv", "epoch_metrics*.csv"):
+            for pattern in ("checkpoint-best*.pth", "valid_best*predictions.csv", "epoch_metrics*.csv", "distillation_metrics.csv"):
                 for previous in Path(resume).resolve().parent.glob(pattern):
                     if not (run_dir/previous.name).exists(): shutil.copy2(previous,run_dir/previous.name)
     (run_dir/"config_resolved.yaml").write_text(yaml.safe_dump(_plain_config(config),allow_unicode=True,sort_keys=False),encoding="utf-8")
@@ -470,6 +504,15 @@ def train(config_path, data_root=None, output_dir=None, resume=None, device_name
                 ema.reset(model); ema_active=True
             loader=warm_loader if epoch < config.get("sampling_warmup_epochs",0) else train_loader
             train_loss,global_step = _train_epoch(model,loader,len(train_data),optimizer,scaler,device,config,epoch,global_step,total_steps,warmup_steps,pos_weights,ema if ema_active else None)
+            kd_metrics = config.pop("_distillation_epoch_metrics", None)
+            if kd_metrics is not None:
+                path = run_dir / "distillation_metrics.csv"
+                exists = path.exists()
+                with path.open("a", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(handle, fieldnames=["epoch", "hard_loss", "soft_loss", "total_loss"])
+                    if not exists:
+                        writer.writeheader()
+                    writer.writerow({"epoch": epoch + 1, **kd_metrics})
             chosen = "ema" if ema_active and config["validation_weights"] != "raw" else "raw"
             results, improved = {}, []
             if not final:
