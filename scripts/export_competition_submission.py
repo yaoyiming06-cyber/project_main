@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from cxr_project.submission import write_competition_submission
 
 
 def main():
@@ -42,16 +48,11 @@ def main():
     if len(template_rows) != len(study_ids) * 10:
         raise ValueError("template must contain exactly ten class rows per Study")
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle, lineterminator="\n")
-        writer.writerow(["Study_id", "Predict_class", "Probability"])
-        for row in prediction_rows:
-            for index, column in enumerate(expected_probability_columns, start=1):
-                probability = float(row[column])
-                if not 0.0 <= probability <= 1.0:
-                    raise ValueError(f"probability outside [0, 1]: {row['Study_id']} {column}")
-                writer.writerow([row["Study_id"], index, f"{probability:.8f}"])
+    probabilities = np.asarray([
+        [float(row[column]) for column in expected_probability_columns]
+        for row in prediction_rows
+    ], dtype=np.float64)
+    write_competition_submission(output_path, study_ids, probabilities)
 
     print(f"Wrote {len(study_ids) * 10} rows for {len(study_ids)} studies to {output_path}")
 

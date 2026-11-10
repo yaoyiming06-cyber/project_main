@@ -19,6 +19,9 @@ for import_root in (PROJECT_ROOT, PROJECT_ROOT / "src"):
 
 from scripts.competition_inference import (
     InferencePipeline,
+    PROBABILITY_DECIMAL_PLACES,
+    PROBABILITY_ROUNDING,
+    round_probabilities,
     scan_image_tree as _scan_image_tree,
     sha256_file,
     validate_warmup_separation as _validate_warmup_separation,
@@ -102,6 +105,26 @@ def _label_ranking_mismatches(reference: np.ndarray, candidate: np.ndarray) -> i
     )
 
 
+def _ranking_change_masks(reference, candidate):
+    """Return affected Studies; an across-Study reversal marks both participants."""
+    study_mask = np.zeros(len(reference), dtype=bool)
+    for label in range(reference.shape[1]):
+        for index in range(len(reference) - 1):
+            changed = (
+                np.sign(reference[index, label] - reference[index + 1:, label])
+                != np.sign(candidate[index, label] - candidate[index + 1:, label])
+            )
+            if changed.any():
+                study_mask[index] = True
+                study_mask[index + 1:] |= changed
+    first, second = np.triu_indices(reference.shape[1], k=1)
+    label_mask = np.any(
+        np.sign(reference[:, first] - reference[:, second])
+        != np.sign(candidate[:, first] - candidate[:, second]), axis=1
+    )
+    return study_mask, label_mask
+
+
 def _compare_submission(
     path: Path,
     study_ids: list[str],
@@ -111,7 +134,7 @@ def _compare_submission(
 ):
     submission, _ = _read_submission(path)
     candidate = np.asarray(probabilities, dtype=np.float64)
-    if candidate.shape != (len(study_ids), 10):
+    if not study_ids or candidate.shape != (len(study_ids), 10):
         raise ValueError("candidate predictions must have shape (Study count, 10)")
     if not np.isfinite(candidate).all() or ((candidate < 0) | (candidate > 1)).any():
         raise ValueError("candidate probabilities must be finite and between 0 and 1")
@@ -129,22 +152,29 @@ def _compare_submission(
         [[submission[study_id][label] for label in range(1, 11)] for study_id in study_ids],
         dtype=np.float64,
     )
+    candidate = round_probabilities(candidate)
+    reference = round_probabilities(reference)
     absolute_error = np.abs(candidate - reference)
     over_tolerance = absolute_error > tolerance + 1e-12
     classification_changes = (candidate >= threshold) != (reference >= threshold)
     study_rank_changes = _study_ranking_mismatches(reference, candidate)
     label_rank_changes = _label_ranking_mismatches(reference, candidate)
+    study_rank_mask, label_rank_mask = _ranking_change_masks(reference, candidate)
+    mismatch_mask = np.any(over_tolerance | classification_changes, axis=1) | study_rank_mask | label_rank_mask
+    mismatched_study_ids = [sid for sid, changed in zip(study_ids, mismatch_mask) if changed]
 
     first_mismatches = []
-    for row_index, label_index in np.argwhere(over_tolerance | classification_changes)[:10]:
+    for row_index in np.flatnonzero(mismatch_mask)[:10]:
         first_mismatches.append(
             {
                 "Study_id": study_ids[int(row_index)],
-                "Predict_class": int(label_index) + 1,
-                "reference_probability": float(reference[row_index, label_index]),
-                "cost_probability": float(candidate[row_index, label_index]),
-                "absolute_error": float(absolute_error[row_index, label_index]),
-                "threshold_changed": bool(classification_changes[row_index, label_index]),
+                "probability_error_classes": (np.flatnonzero(over_tolerance[row_index]) + 1).tolist(),
+                "classification_changed_classes": (np.flatnonzero(classification_changes[row_index]) + 1).tolist(),
+                "reference_probabilities": reference[row_index].tolist(),
+                "cost_probabilities": candidate[row_index].tolist(),
+                "max_absolute_error": float(absolute_error[row_index].max()),
+                "study_ranking_changed": bool(study_rank_mask[row_index]),
+                "label_ranking_changed": bool(label_rank_mask[row_index]),
             }
         )
 
@@ -154,21 +184,46 @@ def _compare_submission(
         "path": str(Path(path).resolve()),
         "sha256": sha256_file(path),
         "probability_tolerance": tolerance,
+        "probability_decimal_places": PROBABILITY_DECIMAL_PLACES,
+        "probability_rounding": PROBABILITY_ROUNDING,
         "max_absolute_error": float(absolute_error.max(initial=0.0)),
         "probability_tolerance_mismatch_count": probability_mismatch_count,
         "classification_threshold": threshold,
         "classification_mismatch_count": classification_mismatch_count,
         "study_ranking_mismatch_count": study_rank_changes,
         "label_ranking_mismatch_count": label_rank_changes,
-        "matched": not (
-            probability_mismatch_count
-            or classification_mismatch_count
-            or study_rank_changes
-            or label_rank_changes
-        ),
-        "mismatch_count": probability_mismatch_count + classification_mismatch_count,
+        "matched": not bool(mismatch_mask.any()),
+        "sample_unit": "Study",
+        "sample_count": len(study_ids),
+        "sample_mismatch_count": len(mismatched_study_ids),
+        "mismatch_count": len(mismatched_study_ids),
+        "mismatched_study_ids": mismatched_study_ids,
         "first_mismatches": first_mismatches,
     }
+
+
+def _summarize_comparisons(comparisons, measured_rows):
+    """Union sample failures across repeats; later passing runs cannot hide an earlier failure."""
+    summary = dict(comparisons[-1])
+    mismatched = set().union(*(set(c["mismatched_study_ids"]) for c in comparisons))
+    ordered = list(dict.fromkeys(row["Study_id"] for row in measured_rows))
+    summary.update(
+        matched=all(c["matched"] for c in comparisons),
+        mismatch_count=len(mismatched),
+        sample_mismatch_count=len(mismatched),
+        mismatched_study_ids=[sid for sid in ordered if sid in mismatched],
+        image_sample_count=len(measured_rows),
+        image_mismatch_count=sum(row["Study_id"] in mismatched for row in measured_rows),
+        max_absolute_error=max(c["max_absolute_error"] for c in comparisons),
+        checked_repeats=len(comparisons),
+        event_counts_scope="all measured repeats; sample/image counts are unique across repeats",
+        first_mismatches=[dict(item, repeat=i + 1)
+                          for i, c in enumerate(comparisons) for item in c["first_mismatches"]][:10],
+    )
+    for key in ("probability_tolerance_mismatch_count", "classification_mismatch_count",
+                "study_ranking_mismatch_count", "label_ranking_mismatch_count"):
+        summary[key] = sum(c[key] for c in comparisons)
+    return summary
 
 
 def _model_records(pipeline: InferencePipeline):
@@ -293,6 +348,7 @@ def main() -> int:
         first_ids = None
         first_probabilities = None
         repeat_max_deltas = []
+        comparisons = []
         for repeat in range(args.repeats):
             study_ids, probabilities, elapsed = _timed_prediction_run(
                 pipeline, measured, prediction_path
@@ -307,16 +363,14 @@ def main() -> int:
                 delta = float(np.max(np.abs(probabilities - first_probabilities), initial=0.0))
                 repeat_max_deltas.append(delta)
             runs.append({"repeat": repeat + 1, "seconds": elapsed})
+            if submission_path is not None:
+                written = _read_written_probabilities(prediction_path, study_ids)
+                comparisons.append(_compare_submission(
+                    submission_path, study_ids, written,
+                    threshold=pipeline.classification_threshold,
+                ))
 
-        comparison = None
-        final_probabilities = _read_written_probabilities(prediction_path, study_ids)
-        if submission_path is not None:
-            comparison = _compare_submission(
-                submission_path,
-                study_ids,
-                final_probabilities,
-                threshold=pipeline.classification_threshold,
-            )
+        comparison = _summarize_comparisons(comparisons, measured.rows) if comparisons else None
 
         seconds = [run["seconds"] for run in runs]
         official_count_match = measured.num_images == args.expected_images
@@ -328,9 +382,12 @@ def main() -> int:
             model.model.image_chunk_size == 1 for model in pipeline.models
         )
         report = {
-            "status": "completed" if (
+            "status": "consistency_failed" if comparison is not None and not comparison["matched"] else "completed" if (
                 official_count_match and args.repeats == 3 and official_timing_resolved
             ) else "diagnostic_only",
+            "consistency_status": "not_checked" if comparison is None else (
+                "passed" if comparison["matched"] else "failed"
+            ),
             "bundle": str(pipeline.bundle_path),
             "bundle_sha256": sha256_file(pipeline.bundle_path),
             "seed": pipeline.seed,
@@ -341,7 +398,10 @@ def main() -> int:
             "models": _model_records(pipeline),
             "fusion": "weighted arithmetic mean of model probabilities",
             "patient_smoothing_alpha": pipeline.patient_smoothing_alpha,
-            "patient_smoothing_scope": "all Studies in the supplied input directory",
+            "patient_smoothing_scope": "disabled for subset-reproducible official inference",
+            "probability_decimal_places": PROBABILITY_DECIMAL_PLACES,
+            "probability_rounding": PROBABILITY_ROUNDING,
+            "classification_threshold": pipeline.classification_threshold,
             "tta": pipeline.tta,
             "input": {
                 "data_dir": str(measured_root),
@@ -373,7 +433,7 @@ def main() -> int:
                     "preprocessing",
                     "serial model inference",
                     "model probability fusion",
-                    "patient smoothing",
+                    "final four-decimal probability rounding",
                     "final competition CSV serialization and close",
                 ],
                 "excluded": [
@@ -406,6 +466,7 @@ def main() -> int:
             "prediction_output": str(prediction_path),
             "prediction_output_sha256": sha256_file(prediction_path),
             "submission_comparison": comparison,
+            "repeat_submission_comparisons": comparisons,
         }
         report_path.write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

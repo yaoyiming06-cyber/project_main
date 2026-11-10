@@ -296,12 +296,20 @@ Windows 正式预测与官方100张样本测速：
 
 ```powershell
 python scripts/predict.py --bundle configs/competition_deployment.json --data-dir D:\path\to\pictures --output submission.csv --device cuda
-python scripts/cost.py --bundle configs/competition_deployment.json --data-dir D:\path\to\cost_data_test\pictures_100 --warmup-dir D:\path\to\cost_data_test\pictures_5 --output-dir outputs\cost_run --device cuda
+python scripts/cost.py --bundle configs/competition_deployment.json --data-dir D:\path\to\cost_data_test\pictures_100 --warmup-dir D:\path\to\cost_data_test\pictures_5 --output-dir outputs\cost_run --submission submission.csv --device cuda
 ```
 
-测速默认要求100张输入、5张独立预热图片（优先各取自不同Study）、连续3轮；计时包含图片读取、预处理、三个模型串行推理、融合、患者平滑和最终CSV写盘，模型加载、扫描目录及预热不计时。Study内的图像特征也逐张编码（image batch=1），再执行完整Study聚合。输出报告记录模型哈希、权重来源、精度、样本数和计时边界。比赛提供的本机样例不足100张时，仅可用 --allow-short-sample 联调，该结果也只作诊断。
+测速默认要求100张输入、5张独立预热图片（优先各取自不同Study）、连续3轮；计时包含图片读取、预处理、清单中各模型串行推理、融合、最终四位小数舍入和CSV写盘，模型加载、扫描目录、预热及一致性比较不计时。Study内的图像特征也逐张编码（image batch=1），再执行完整Study聚合。输出报告记录模型哈希、权重来源、精度、样本数和计时边界。比赛提供的本机样例不足100张时，仅可用 --allow-short-sample 联调，该结果也只作诊断。
 
-患者平滑只使用本次 data-dir 中同一 Subject 的 Study。若要与全量提交逐Study核对，输入目录必须包含参与平滑的完整测试集；用抽样目录与全量提交比较会因患者上下文不同而产生预期差异。
+2026-11-09按用户提供的官方补充说明更新：`predict.py`、`cost.py`及`export_competition_submission.py`共用`src/cxr_project/submission.py`。只在融合完成后，把最终概率按十进制half-even（恰好中间取偶数）统一舍入至小数点后4位；CSV固定输出4位。先校验原始概率有限且在[0,1]内，再舍入，不能通过舍入掩盖越界值。没有在单模型输出或融合中途舍入。模型固定随机种子、eval/inference模式、确定性算法，关闭cuDNN benchmark及TF32；验证预处理无随机增强，固定TTA由同一部署清单控制。
+
+`cost.py --submission`会逐轮读取实际写出的CSV，与参考提交按Study_id和1–10类别对齐；参考文件即使保留8位，也先统一舍入4位。概率误差必须≤0.001、按部署清单固定阈值的`>=`判定相同、Study内标签排序及同标签跨Study排序（包括并列）相同。默认阈值0.5，CSV仍是`Study_id,Predict_class,Probability`三列。不要对两边分别选择阈值或精度策略。
+
+报告中`consistency_status=passed`才表示已核验通过；未传`--submission`时为`not_checked`，测速完成不代表一致性通过。`submission_comparison.sample_mismatch_count`及`mismatch_count`是三轮中累计涉及的不同Study数，排序异常也计入；`image_mismatch_count`是这些Study对应的测量图片数（同Study多张图分别计数），两者均须为0。每轮细节在`repeat_submission_comparisons`，任一轮失败则返回非零退出码并标记`status=consistency_failed`。四位舍入后仍有排序或阈值变化则不能通过，不能只看概率误差。
+
+正式共享入口要求`patient_smoothing_alpha: 0.0`，非零时在加载模型前报错：按输入目录计算的患者均值会随抽样变化，无法保证100张核验结果复现全量提交。研究用平滑脚本及历史提交文件仍保留；此前使用患者平滑或不同推理设置的提交须用最终统一清单重新推理生成，不能只改CSV小数位。当前仍是Study级聚合，因此核验样本必须保留与最终预测相同的完整Study图像；若只抽同Study中的一张图，输出也可能改变，舍入不能解决输入缺失。
+
+现有`outputs/share/cost_compliance_package_20261108.zip`是更新前归档，不包含本次四位舍入及一致性修改。发送测速代码时应包含当前共享入口及新增`submission.py`，不要混用旧包和新脚本。代码测试通过不等于已经在比赛指定机器、最终权重和官方100张图片上通过复核；需按上面的命令实际验证。既有submission不会被自动覆盖。
 
 ## 标签注意力与空间查询头实验（2026-11-08）
 

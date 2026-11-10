@@ -14,6 +14,8 @@ for import_root in (PROJECT_ROOT, PROJECT_ROOT / "src"):
 
 from scripts.competition_inference import (
     InferencePipeline,
+    PROBABILITY_DECIMAL_PLACES,
+    PROBABILITY_ROUNDING,
     scan_image_tree,
     sha256_file,
 )
@@ -65,7 +67,10 @@ def main() -> None:
             ) else "fp32",
             "fusion": "weighted arithmetic mean of model probabilities",
             "patient_smoothing_alpha": pipeline.patient_smoothing_alpha,
-            "patient_smoothing_scope": "all Studies in the supplied input directory",
+            "patient_smoothing_scope": "disabled for subset-reproducible official inference",
+            "probability_decimal_places": PROBABILITY_DECIMAL_PLACES,
+            "probability_rounding": PROBABILITY_ROUNDING,
+            "classification_threshold": pipeline.classification_threshold,
             "tta": pipeline.tta,
             "synthetic_view_value": "UNKNOWN",
             "true_view_or_clinical_metadata_read": False,

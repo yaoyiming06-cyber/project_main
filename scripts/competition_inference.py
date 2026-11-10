@@ -6,6 +6,7 @@ import csv
 import hashlib
 import json
 import math
+import os
 import random
 import re
 import tempfile
@@ -27,6 +28,12 @@ from scripts.predict_test import (
     validate_checkpoint_config,
 )
 from cxr_project.model import build_model
+from cxr_project.submission import (
+    PROBABILITY_DECIMAL_PLACES,
+    PROBABILITY_ROUNDING,
+    round_probabilities,
+    write_competition_submission,
+)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +56,8 @@ def sha256_file(path: Path) -> str:
 
 
 def set_seed(seed: int) -> None:
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(True)
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -56,6 +65,8 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.allow_tf32 = False
+        torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def scan_image_tree(data_root: Path) -> list[dict[str, str]]:
@@ -187,6 +198,12 @@ class InferencePipeline:
         )
         if not math.isfinite(self.patient_smoothing_alpha) or not 0 <= self.patient_smoothing_alpha <= 1:
             raise ValueError("patient_smoothing_alpha must be between 0 and 1")
+        if self.patient_smoothing_alpha != 0:
+            raise ValueError(
+                "official predict/cost requires patient_smoothing_alpha=0: directory-based "
+                "patient smoothing cannot reproduce full-test predictions on a 100-image subset; "
+                "regenerate submission with smoothing disabled"
+            )
         fusion = self.bundle.get("fusion", "weighted_probability_mean")
         if fusion != "weighted_probability_mean":
             raise ValueError("fusion must be 'weighted_probability_mean'")
@@ -359,24 +376,7 @@ class InferencePipeline:
             axis=0,
             weights=self._normalized_weights,
         )
-        if self.patient_smoothing_alpha:
-            subject_order = list(dict.fromkeys(
-                prepared.subject_by_study[study_id] for study_id in prepared.study_ids
-            ))
-            subject_indices = {subject: index for index, subject in enumerate(subject_order)}
-            inverse = np.asarray(
-                [subject_indices[prepared.subject_by_study[sid]] for sid in prepared.study_ids],
-                dtype=np.int64,
-            )
-            sums = np.zeros((len(subject_order), probabilities.shape[1]), dtype=np.float64)
-            np.add.at(sums, inverse, probabilities)
-            counts = np.bincount(inverse)
-            means = sums[inverse] / counts[inverse, None]
-            alpha = self.patient_smoothing_alpha
-            probabilities = (1.0 - alpha) * probabilities + alpha * means
-
-        if not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any():
-            raise ValueError("inference produced probabilities outside [0, 1]")
+        probabilities = round_probabilities(probabilities)
         if output_path is not None:
             write_competition_submission(output_path, prepared.study_ids, probabilities)
         return prepared.study_ids, probabilities
@@ -392,18 +392,3 @@ class InferencePipeline:
 
     def __exit__(self, exc_type, exc, traceback):
         self.close()
-
-
-def write_competition_submission(
-    path: Path, study_ids: list[str], probabilities: np.ndarray
-) -> None:
-    path = Path(path)
-    if probabilities.shape != (len(study_ids), 10):
-        raise ValueError("submission predictions must have shape (Study count, 10)")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle, lineterminator="\n")
-        writer.writerow(["Study_id", "Predict_class", "Probability"])
-        for study_id, row in zip(study_ids, probabilities):
-            for label_index, probability in enumerate(row, start=1):
-                writer.writerow([study_id, label_index, f"{float(probability):.8f}"])
